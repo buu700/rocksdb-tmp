@@ -325,67 +325,32 @@ DEFINE_bool(enable_write_thread_adaptive_yield, true,
             "Use a yielding spin loop for brief writer thread waits.");
 
 #ifndef ROCKSDB_LITE
-// Options for StackableDB-based BlobDB
-DEFINE_bool(use_blob_db, false, "[Stacked BlobDB] Use BlobDB.");
+// BlobDB Options
+DEFINE_bool(use_blob_db, false, "Use BlobDB.");
 
-DEFINE_uint64(
-    blob_db_min_blob_size,
-    ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().min_blob_size,
-    "[Stacked BlobDB] Smallest blob to store in a file. Blobs "
-    "smaller than this will be inlined with the key in the LSM tree.");
+DEFINE_uint64(blob_db_min_blob_size,
+              ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().min_blob_size,
+              "Smallest blob to store in a file. Blobs smaller than this "
+              "will be inlined with the key in the LSM tree.");
 
-DEFINE_uint64(
-    blob_db_bytes_per_sync,
-    ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().bytes_per_sync,
-    "[Stacked BlobDB] Sync blob files once per every N bytes written.");
+DEFINE_uint64(blob_db_bytes_per_sync,
+              ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().bytes_per_sync,
+              "Sync blob files once per every N bytes written.");
 
 DEFINE_uint64(blob_db_file_size,
               ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().blob_file_size,
-              "[Stacked BlobDB] Target size of each blob file.");
+              "Target size of each blob file.");
 
 DEFINE_bool(
     blob_db_enable_gc,
     ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().enable_garbage_collection,
-    "[Stacked BlobDB] Enable BlobDB garbage collection.");
+    "Enable BlobDB garbage collection.");
 
 DEFINE_double(
     blob_db_gc_cutoff,
     ROCKSDB_NAMESPACE::blob_db::BlobDBOptions().garbage_collection_cutoff,
-    "[Stacked BlobDB] Cutoff ratio for BlobDB garbage collection.");
+    "Cutoff ratio for BlobDB garbage collection.");
 #endif  // !ROCKSDB_LITE
-
-// Options for integrated BlobDB
-DEFINE_bool(allow_setting_blob_options_dynamically, false,
-            "[Integrated BlobDB] Allow setting blob options dynamically.");
-
-DEFINE_bool(
-    enable_blob_files,
-    ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions().enable_blob_files,
-    "[Integrated BlobDB] Enable writing large values to separate blob files.");
-
-DEFINE_uint64(min_blob_size,
-              ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions().min_blob_size,
-              "[Integrated BlobDB] The size of the smallest value to be stored "
-              "separately in a blob file.");
-
-DEFINE_uint64(blob_file_size,
-              ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions().blob_file_size,
-              "[Integrated BlobDB] The size limit for blob files.");
-
-DEFINE_string(blob_compression_type, "none",
-              "[Integrated BlobDB] The compression algorithm to use for large "
-              "values stored in blob files.");
-
-DEFINE_bool(enable_blob_garbage_collection,
-            ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions()
-                .enable_blob_garbage_collection,
-            "[Integrated BlobDB] Enable blob garbage collection.");
-
-DEFINE_double(blob_garbage_collection_age_cutoff,
-              ROCKSDB_NAMESPACE::AdvancedColumnFamilyOptions()
-                  .blob_garbage_collection_age_cutoff,
-              "[Integrated BlobDB] The cutoff in terms of blob file age for "
-              "garbage collection.");
 
 static const bool FLAGS_subcompactions_dummy __attribute__((__unused__)) =
     RegisterFlagValidator(&FLAGS_subcompactions, &ValidateUint32Range);
@@ -473,6 +438,7 @@ DEFINE_int32(kill_random_test, 0,
              "probability 1/this");
 static const bool FLAGS_kill_random_test_dummy __attribute__((__unused__)) =
     RegisterFlagValidator(&FLAGS_kill_random_test, &ValidateInt32Positive);
+extern int rocksdb_kill_odds;
 
 DEFINE_string(kill_exclude_prefixes, "",
               "If non-empty, kill points with prefix in the list given will be"
@@ -660,10 +626,6 @@ DEFINE_int32(compression_zstd_max_train_bytes, 0,
 DEFINE_int32(compression_parallel_threads, 1,
              "Number of threads for parallel compression.");
 
-DEFINE_uint64(compression_max_dict_buffer_bytes, 0,
-              "Buffering limit for SST file data to sample for dictionary "
-              "compression.");
-
 DEFINE_string(bottommost_compression_type, "disable",
               "Algorithm to use to compress bottommost level of the database. "
               "\"disable\" means disabling the feature");
@@ -791,28 +753,11 @@ DEFINE_bool(paranoid_file_checks, true,
             "After writing every SST file, reopen it and read all the keys "
             "and validate checksums");
 
-DEFINE_bool(fail_if_options_file_error, false,
-            "Fail operations that fail to detect or properly persist options "
-            "file.");
-
-DEFINE_uint64(batch_protection_bytes_per_key, 0,
-              "If nonzero, enables integrity protection in `WriteBatch` at the "
-              "specified number of bytes per key. Currently the only supported "
-              "nonzero value is eight.");
-
 DEFINE_string(file_checksum_impl, "none",
               "Name of an implementation for file_checksum_gen_factory, or "
               "\"none\" for null.");
 
 DEFINE_int32(write_fault_one_in, 0,
              "On non-zero, enables fault injection on write");
-
-DEFINE_uint64(user_timestamp_size, 0,
-              "Number of bytes for a user-defined timestamp. Currently, only "
-              "8-byte is supported");
-
-DEFINE_int32(open_metadata_write_fault_one_in, 0,
-             "On non-zero, enables fault injection on file metadata write "
-             "during DB reopen.");
 
 #endif  // GFLAGS

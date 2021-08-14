@@ -58,7 +58,7 @@ class MockTableFactory : public TableFactory {
       bool prefetch_index_and_filter_in_cache = true) const override;
   TableBuilder* NewTableBuilder(
       const TableBuilderOptions& table_builder_options,
-      WritableFileWriter* file) const override;
+      uint32_t column_familly_id, WritableFileWriter* file) const override;
 
   // This function will directly create mock table instead of going through
   // MockTableBuilder. file_contents has to have a format of <internal_key,

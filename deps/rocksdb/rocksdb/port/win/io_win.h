@@ -17,7 +17,6 @@
 #include "rocksdb/file_system.h"
 #include "rocksdb/status.h"
 #include "util/aligned_buffer.h"
-#include "util/string_util.h"
 
 namespace ROCKSDB_NAMESPACE {
 namespace port {
@@ -38,11 +37,10 @@ inline IOStatus IOErrorFromLastWindowsError(const std::string& context) {
 
 inline IOStatus IOError(const std::string& context, int err_number) {
   return (err_number == ENOSPC)
-             ? IOStatus::NoSpace(context, errnoStr(err_number).c_str())
+             ? IOStatus::NoSpace(context, strerror(err_number))
              : (err_number == ENOENT)
-                   ? IOStatus::PathNotFound(context,
-                                            errnoStr(err_number).c_str())
-                   : IOStatus::IOError(context, errnoStr(err_number).c_str());
+                   ? IOStatus::PathNotFound(context, strerror(err_number))
+                   : IOStatus::IOError(context, strerror(err_number));
 }
 
 class WinFileData;

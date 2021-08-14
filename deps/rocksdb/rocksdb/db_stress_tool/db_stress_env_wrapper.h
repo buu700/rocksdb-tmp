@@ -28,9 +28,7 @@ class DbStressEnvWrapper : public EnvWrapper {
         f.find(".restore") != std::string::npos) {
       return target()->DeleteFile(f);
     }
-    // Rename the file instead of deletion to keep the history, and
-    // at the same time it is not visible to RocksDB.
-    return target()->RenameFile(f, f + "_renamed_");
+    return Status::OK();
   }
 
   // If true, all manifest files will not be delted in DeleteFile().

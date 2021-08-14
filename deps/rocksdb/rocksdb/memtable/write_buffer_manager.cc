@@ -8,9 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "rocksdb/write_buffer_manager.h"
-
-#include "cache/cache_entry_roles.h"
-#include "db/db_impl/db_impl.h"
+#include <mutex>
 #include "util/coding.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -51,16 +49,13 @@ struct WriteBufferManager::CacheRep {};
 #endif  // ROCKSDB_LITE
 
 WriteBufferManager::WriteBufferManager(size_t _buffer_size,
-                                       std::shared_ptr<Cache> cache,
-                                       bool allow_stall)
+                                       std::shared_ptr<Cache> cache)
     : buffer_size_(_buffer_size),
       mutable_limit_(buffer_size_ * 7 / 8),
       memory_used_(0),
       memory_active_(0),
       dummy_size_(0),
-      cache_rep_(nullptr),
-      allow_stall_(allow_stall),
-      stall_active_(false) {
+      cache_rep_(nullptr) {
 #ifndef ROCKSDB_LITE
   if (cache) {
     // Construct the cache key using the pointer to this.
@@ -83,17 +78,6 @@ WriteBufferManager::~WriteBufferManager() {
 #endif  // ROCKSDB_LITE
 }
 
-void WriteBufferManager::ReserveMem(size_t mem) {
-  if (cache_rep_ != nullptr) {
-    ReserveMemWithCache(mem);
-  } else if (enabled()) {
-    memory_used_.fetch_add(mem, std::memory_order_relaxed);
-  }
-  if (enabled()) {
-    memory_active_.fetch_add(mem, std::memory_order_relaxed);
-  }
-}
-
 // Should only be called from write thread
 void WriteBufferManager::ReserveMemWithCache(size_t mem) {
 #ifndef ROCKSDB_LITE
@@ -108,9 +92,9 @@ void WriteBufferManager::ReserveMemWithCache(size_t mem) {
     // Expand size by at least 256KB.
     // Add a dummy record to the cache
     Cache::Handle* handle = nullptr;
-    Status s = cache_rep_->cache_->Insert(
-        cache_rep_->GetNextCacheKey(), nullptr, kSizeDummyEntry,
-        GetNoopDeleterForRole<CacheEntryRole::kWriteBuffer>(), &handle);
+    Status s =
+        cache_rep_->cache_->Insert(cache_rep_->GetNextCacheKey(), nullptr,
+                                   kSizeDummyEntry, nullptr, &handle);
     s.PermitUncheckedError();  // TODO: What to do on error?
     // We keep the handle even if insertion fails and a null handle is
     // returned, so that when memory shrinks, we don't release extra
@@ -126,24 +110,6 @@ void WriteBufferManager::ReserveMemWithCache(size_t mem) {
 #else
   (void)mem;
 #endif  // ROCKSDB_LITE
-}
-
-void WriteBufferManager::ScheduleFreeMem(size_t mem) {
-  if (enabled()) {
-    memory_active_.fetch_sub(mem, std::memory_order_relaxed);
-  }
-}
-
-void WriteBufferManager::FreeMem(size_t mem) {
-  if (cache_rep_ != nullptr) {
-    FreeMemWithCache(mem);
-  } else if (enabled()) {
-    memory_used_.fetch_sub(mem, std::memory_order_relaxed);
-  }
-  // Check if stall is active and can be ended.
-  if (allow_stall_) {
-    EndWriteStall();
-  }
 }
 
 void WriteBufferManager::FreeMemWithCache(size_t mem) {
@@ -179,50 +145,4 @@ void WriteBufferManager::FreeMemWithCache(size_t mem) {
   (void)mem;
 #endif  // ROCKSDB_LITE
 }
-
-void WriteBufferManager::BeginWriteStall(StallInterface* wbm_stall) {
-  assert(wbm_stall != nullptr);
-  if (wbm_stall) {
-    std::unique_lock<std::mutex> lock(mu_);
-    queue_.push_back(wbm_stall);
-  }
-  // In case thread enqueue itself and memory got freed in parallel, end the
-  // stall.
-  if (!ShouldStall()) {
-    EndWriteStall();
-  }
-}
-
-// Called when memory is freed in FreeMem.
-void WriteBufferManager::EndWriteStall() {
-  if (enabled() && !IsStallThresholdExceeded()) {
-    {
-      std::unique_lock<std::mutex> lock(mu_);
-      stall_active_.store(false, std::memory_order_relaxed);
-      if (queue_.empty()) {
-        return;
-      }
-    }
-
-    // Get the instances from the list and call WBMStallInterface::Signal to
-    // change the state to running and unblock the DB instances.
-    // Check ShouldStall() incase stall got active by other DBs.
-    while (!ShouldStall() && !queue_.empty()) {
-      std::unique_lock<std::mutex> lock(mu_);
-      StallInterface* wbm_stall = queue_.front();
-      queue_.pop_front();
-      wbm_stall->Signal();
-    }
-  }
-}
-
-void WriteBufferManager::RemoveDBFromQueue(StallInterface* wbm_stall) {
-  assert(wbm_stall != nullptr);
-  if (enabled() && allow_stall_) {
-    std::unique_lock<std::mutex> lock(mu_);
-    queue_.remove(wbm_stall);
-    wbm_stall->Signal();
-  }
-}
-
 }  // namespace ROCKSDB_NAMESPACE

@@ -539,7 +539,7 @@ void TestBoundary(InternalKey& ik1, std::string& v1, InternalKey& ik2,
   int level_ = -1;
 
   std::vector<std::string> keys;
-  const ImmutableOptions ioptions(options);
+  const ImmutableCFOptions ioptions(options);
   const MutableCFOptions moptions(options);
   const InternalKeyComparator internal_comparator(options.comparator);
 
@@ -551,15 +551,16 @@ void TestBoundary(InternalKey& ik1, std::string& v1, InternalKey& ik2,
   file_writer.reset(
       new WritableFileWriter(std::move(f), "" /* don't care */, FileOptions()));
   std::unique_ptr<TableBuilder> builder;
-  IntTblPropCollectorFactories int_tbl_prop_collector_factories;
+  std::vector<std::unique_ptr<IntTblPropCollectorFactory>>
+      int_tbl_prop_collector_factories;
   std::string column_family_name;
   builder.reset(ioptions.table_factory->NewTableBuilder(
-      TableBuilderOptions(
-          ioptions, moptions, internal_comparator,
-          &int_tbl_prop_collector_factories, options.compression,
-          CompressionOptions(),
-          TablePropertiesCollectorFactory::Context::kUnknownColumnFamily,
-          column_family_name, level_),
+      TableBuilderOptions(ioptions, moptions, internal_comparator,
+                          &int_tbl_prop_collector_factories,
+                          options.compression, options.sample_for_compression,
+                          CompressionOptions(), false /* skip_filters */,
+                          column_family_name, level_),
+      TablePropertiesCollectorFactory::Context::kUnknownColumnFamily,
       file_writer.get()));
 
   builder->Add(ik1.Encode().ToString(), v1);

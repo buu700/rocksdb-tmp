@@ -26,7 +26,7 @@
 #include "db/memtable.h"
 #include "db/write_batch_internal.h"
 #include "env/composite_env_wrapper.h"
-#include "file/line_file_reader.h"
+#include "file/read_write_util.h"
 #include "file/writable_file_writer.h"
 #include "options/cf_options.h"
 #include "rocksdb/db.h"
@@ -283,8 +283,6 @@ TraceAnalyzer::TraceAnalyzer(std::string& trace_path, std::string& output_path,
   end_time_ = 0;
   time_series_start_ = 0;
   cur_time_sec_ = 0;
-  // Set the default trace file version as version 0.2
-  trace_file_version_ = 2;
   if (FLAGS_sample_ratio > 1.0 || FLAGS_sample_ratio <= 0) {
     sample_max_ = 1;
   } else {
@@ -391,15 +389,10 @@ Status TraceAnalyzer::PrepareProcessing() {
 
 Status TraceAnalyzer::ReadTraceHeader(Trace* header) {
   assert(header != nullptr);
-  std::string encoded_trace;
-  // Read the trace head
-  Status s = trace_reader_->Read(&encoded_trace);
+  Status s = ReadTraceRecord(header);
   if (!s.ok()) {
     return s;
   }
-
-  s = TracerHelper::DecodeTrace(encoded_trace, header);
-
   if (header->type != kTraceBegin) {
     return Status::Corruption("Corrupted trace file. Incorrect header.");
   }
@@ -429,7 +422,13 @@ Status TraceAnalyzer::ReadTraceRecord(Trace* trace) {
   if (!s.ok()) {
     return s;
   }
-  return TracerHelper::DecodeTrace(encoded_trace, trace);
+
+  Slice enc_slice = Slice(encoded_trace);
+  GetFixed64(&enc_slice, &trace->ts);
+  trace->type = static_cast<TraceType>(enc_slice[0]);
+  enc_slice.remove_prefix(kTraceTypeSize + kTracePayloadLengthSize);
+  trace->payload = enc_slice.ToString();
+  return s;
 }
 
 // process the trace itself and redirect the trace content
@@ -441,11 +440,6 @@ Status TraceAnalyzer::StartProcessing() {
   s = ReadTraceHeader(&header);
   if (!s.ok()) {
     fprintf(stderr, "Cannot read the header\n");
-    return s;
-  }
-  s = TracerHelper::ParseTraceHeader(header, &trace_file_version_,
-                                     &db_version_);
-  if (!s.ok()) {
     return s;
   }
   trace_create_time_ = header.ts;
@@ -466,22 +460,14 @@ Status TraceAnalyzer::StartProcessing() {
     if (trace.type == kTraceWrite) {
       total_writes_++;
       c_time_ = trace.ts;
-      Slice batch_data;
-      if (trace_file_version_ < 2) {
-        Slice tmp_data(trace.payload);
-        batch_data = tmp_data;
-      } else {
-        WritePayload w_payload;
-        TracerHelper::DecodeWritePayload(&trace, &w_payload);
-        batch_data = w_payload.write_batch_data;
-      }
+      WriteBatch batch(trace.payload);
+
       // Note that, if the write happens in a transaction,
       // 'Write' will be called twice, one for Prepare, one for
       // Commit. Thus, in the trace, for the same WriteBatch, there
       // will be two reords if it is in a transaction. Here, we only
       // process the reord that is committed. If write is non-transaction,
       // HasBeginPrepare()==false, so we process it normally.
-      WriteBatch batch(batch_data.ToString());
       if (batch.HasBeginPrepare() && !batch.HasCommit()) {
         continue;
       }
@@ -492,42 +478,26 @@ Status TraceAnalyzer::StartProcessing() {
         return s;
       }
     } else if (trace.type == kTraceGet) {
-      GetPayload get_payload;
-      get_payload.get_key = 0;
-      if (trace_file_version_ < 2) {
-        DecodeCFAndKeyFromString(trace.payload, &get_payload.cf_id,
-                                 &get_payload.get_key);
-      } else {
-        TracerHelper::DecodeGetPayload(&trace, &get_payload);
-      }
+      uint32_t cf_id = 0;
+      Slice key;
+      DecodeCFAndKeyFromString(trace.payload, &cf_id, &key);
       total_gets_++;
 
-      s = HandleGet(get_payload.cf_id, get_payload.get_key.ToString(), trace.ts,
-                    1);
+      s = HandleGet(cf_id, key.ToString(), trace.ts, 1);
       if (!s.ok()) {
         fprintf(stderr, "Cannot process the get in the trace\n");
         return s;
       }
     } else if (trace.type == kTraceIteratorSeek ||
                trace.type == kTraceIteratorSeekForPrev) {
-      IterPayload iter_payload;
-      iter_payload.cf_id = 0;
-      if (trace_file_version_ < 2) {
-        DecodeCFAndKeyFromString(trace.payload, &iter_payload.cf_id,
-                                 &iter_payload.iter_key);
-      } else {
-        TracerHelper::DecodeIterPayload(&trace, &iter_payload);
-      }
-      s = HandleIter(iter_payload.cf_id, iter_payload.iter_key.ToString(),
-                     trace.ts, trace.type);
+      uint32_t cf_id = 0;
+      Slice key;
+      DecodeCFAndKeyFromString(trace.payload, &cf_id, &key);
+      s = HandleIter(cf_id, key.ToString(), trace.ts, trace.type);
       if (!s.ok()) {
         fprintf(stderr, "Cannot process the iterator in the trace\n");
         return s;
       }
-    } else if (trace.type == kTraceMultiGet) {
-      MultiGetPayload multiget_payload;
-      assert(trace_file_version_ >= 2);
-      TracerHelper::DecodeMultiGetPayload(&trace, &multiget_payload);
     } else if (trace.type == kTraceEnd) {
       break;
     }
@@ -1075,23 +1045,32 @@ Status TraceAnalyzer::ReProcessing() {
           FLAGS_key_space_dir + "/" + std::to_string(cf_id) + ".txt";
       std::string input_key, get_key;
       std::vector<std::string> prefix(kTaTypeNum);
-      std::unique_ptr<FSSequentialFile> file;
+      std::istringstream iss;
+      bool has_data = true;
+      std::unique_ptr<SequentialFile> wkey_input_f;
 
-      s = env_->GetFileSystem()->NewSequentialFile(
-          whole_key_path, FileOptions(env_options_), &file, nullptr);
+      s = env_->NewSequentialFile(whole_key_path, &wkey_input_f, env_options_);
       if (!s.ok()) {
         fprintf(stderr, "Cannot open the whole key space file of CF: %u\n",
                 cf_id);
-        file.reset();
+        wkey_input_f.reset();
       }
 
-      if (file) {
+      if (wkey_input_f) {
+        std::unique_ptr<FSSequentialFile> file;
+        file = NewLegacySequentialFileWrapper(wkey_input_f);
         size_t kTraceFileReadaheadSize = 2 * 1024 * 1024;
-        LineFileReader lf_reader(
+        SequentialFileReader sf_reader(
             std::move(file), whole_key_path,
             kTraceFileReadaheadSize /* filereadahead_size */);
-        for (cfs_[cf_id].w_count = 0; lf_reader.ReadLine(&get_key);
+        for (cfs_[cf_id].w_count = 0;
+             ReadOneLine(&iss, &sf_reader, &get_key, &has_data, &s);
              ++cfs_[cf_id].w_count) {
+          if (!s.ok()) {
+            fprintf(stderr, "Read whole key space file failed\n");
+            return s;
+          }
+
           input_key = ROCKSDB_NAMESPACE::LDBCommand::HexToString(get_key);
           for (int type = 0; type < kTaTypeNum; type++) {
             if (!ta_[type].enabled) {
@@ -1147,11 +1126,6 @@ Status TraceAnalyzer::ReProcessing() {
               cfs_[cf_id].w_key_size_stats[input_key.size()]++;
             }
           }
-        }
-        s = lf_reader.GetStatus();
-        if (!s.ok()) {
-          fprintf(stderr, "Read whole key space file failed\n");
-          return s;
         }
       }
     }

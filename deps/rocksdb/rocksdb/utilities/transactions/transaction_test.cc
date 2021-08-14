@@ -2814,8 +2814,7 @@ TEST_P(TransactionTest, MultiGetBatchedTest) {
   ASSERT_TRUE(statuses[1].IsNotFound());
   ASSERT_TRUE(statuses[2].ok());
   ASSERT_EQ(values[2], "val3_new");
-  ASSERT_TRUE(statuses[3].ok());
-  ASSERT_EQ(values[3], "foo,bar");
+  ASSERT_TRUE(statuses[3].IsMergeInProgress());
   ASSERT_TRUE(statuses[4].ok());
   ASSERT_EQ(values[4], "val5");
   ASSERT_TRUE(statuses[5].ok());
@@ -4840,8 +4839,7 @@ TEST_P(TransactionTest, MergeTest) {
   ASSERT_OK(s);
 
   s = txn->Get(read_options, "A", &value);
-  ASSERT_OK(s);
-  ASSERT_EQ("a0,1,2", value);
+  ASSERT_TRUE(s.IsMergeInProgress());
 
   s = txn->Put("A", "a");
   ASSERT_OK(s);
@@ -4854,8 +4852,7 @@ TEST_P(TransactionTest, MergeTest) {
   ASSERT_OK(s);
 
   s = txn->Get(read_options, "A", &value);
-  ASSERT_OK(s);
-  ASSERT_EQ("a,3", value);
+  ASSERT_TRUE(s.IsMergeInProgress());
 
   TransactionOptions txn_options;
   txn_options.lock_timeout = 1;  // 1 ms
@@ -5321,7 +5318,7 @@ TEST_P(TransactionStressTest, ExpiredTransactionDataRace1) {
 
         // Force txn1 to expire
         /* sleep override */
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
         Transaction* txn2 = db->BeginTransaction(write_options, txn_options);
         Status s;
@@ -5337,7 +5334,7 @@ TEST_P(TransactionStressTest, ExpiredTransactionDataRace1) {
   WriteOptions write_options;
   TransactionOptions txn_options;
 
-  txn_options.expiration = 1000;  // 1 second
+  txn_options.expiration = 100;
   Transaction* txn1 = db->BeginTransaction(write_options, txn_options);
 
   Status s;

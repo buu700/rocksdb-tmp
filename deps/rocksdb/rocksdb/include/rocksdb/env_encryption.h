@@ -10,7 +10,6 @@
 #include <string>
 
 #include "rocksdb/env.h"
-#include "rocksdb/file_system.h"
 #include "rocksdb/rocksdb_namespace.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -73,7 +72,7 @@ class BlockCipher {
   //   - ROT13         Create a ROT13 Cipher
   //   - ROT13:nn      Create a ROT13 Cipher with block size of nn
   // @param result The new cipher object
-  // @return OK if the cipher was successfully created
+  // @return OK if the cipher was sucessfully created
   // @return NotFound if an invalid name was specified in the value
   // @return InvalidArgument if either the options were not valid
   static Status CreateFromString(const ConfigOptions& config_options,
@@ -118,7 +117,7 @@ class EncryptionProvider {
   //   - CTR         Create a CTR provider
   //   - test://CTR Create a CTR provider and initialize it for tests.
   // @param result The new provider object
-  // @return OK if the provider was successfully created
+  // @return OK if the provider was sucessfully created
   // @return NotFound if an invalid name was specified in the value
   // @return InvalidArgument if either the options were not valid
   static Status CreateFromString(const ConfigOptions& config_options,
@@ -172,9 +171,9 @@ class EncryptionProvider {
   virtual Status TEST_Initialize() { return Status::OK(); }
 };
 
-class EncryptedSequentialFile : public FSSequentialFile {
+class EncryptedSequentialFile : public SequentialFile {
  protected:
-  std::unique_ptr<FSSequentialFile> file_;
+  std::unique_ptr<SequentialFile> file_;
   std::unique_ptr<BlockAccessCipherStream> stream_;
   uint64_t offset_;
   size_t prefixLength_;
@@ -182,7 +181,7 @@ class EncryptedSequentialFile : public FSSequentialFile {
  public:
   // Default ctor. Given underlying sequential file is supposed to be at
   // offset == prefixLength.
-  EncryptedSequentialFile(std::unique_ptr<FSSequentialFile>&& f,
+  EncryptedSequentialFile(std::unique_ptr<SequentialFile>&& f,
                           std::unique_ptr<BlockAccessCipherStream>&& s,
                           size_t prefixLength)
       : file_(std::move(f)),
@@ -198,8 +197,7 @@ class EncryptedSequentialFile : public FSSequentialFile {
   // If an error was encountered, returns a non-OK status.
   //
   // REQUIRES: External synchronization
-  IOStatus Read(size_t n, const IOOptions& options, Slice* result,
-                char* scratch, IODebugContext* dbg) override;
+  virtual Status Read(size_t n, Slice* result, char* scratch) override;
 
   // Skip "n" bytes from the file. This is guaranteed to be no
   // slower that reading the same data, but may be faster.
@@ -208,37 +206,36 @@ class EncryptedSequentialFile : public FSSequentialFile {
   // file, and Skip will return OK.
   //
   // REQUIRES: External synchronization
-  IOStatus Skip(uint64_t n) override;
+  virtual Status Skip(uint64_t n) override;
 
   // Indicates the upper layers if the current SequentialFile implementation
   // uses direct IO.
-  bool use_direct_io() const override;
+  virtual bool use_direct_io() const override;
 
   // Use the returned alignment value to allocate
   // aligned buffer for Direct I/O
-  size_t GetRequiredBufferAlignment() const override;
+  virtual size_t GetRequiredBufferAlignment() const override;
 
   // Remove any kind of caching of data from the offset to offset+length
   // of this file. If the length is 0, then it refers to the end of file.
   // If the system is not caching the file contents, then this is a noop.
-  IOStatus InvalidateCache(size_t offset, size_t length) override;
+  virtual Status InvalidateCache(size_t offset, size_t length) override;
 
   // Positioned Read for direct I/O
   // If Direct I/O enabled, offset, n, and scratch should be properly aligned
-  IOStatus PositionedRead(uint64_t offset, size_t n, const IOOptions& options,
-                          Slice* result, char* scratch,
-                          IODebugContext* dbg) override;
+  virtual Status PositionedRead(uint64_t offset, size_t n, Slice* result,
+                                char* scratch) override;
 };
 
 // A file abstraction for randomly reading the contents of a file.
-class EncryptedRandomAccessFile : public FSRandomAccessFile {
+class EncryptedRandomAccessFile : public RandomAccessFile {
  protected:
-  std::unique_ptr<FSRandomAccessFile> file_;
+  std::unique_ptr<RandomAccessFile> file_;
   std::unique_ptr<BlockAccessCipherStream> stream_;
   size_t prefixLength_;
 
  public:
-  EncryptedRandomAccessFile(std::unique_ptr<FSRandomAccessFile>&& f,
+  EncryptedRandomAccessFile(std::unique_ptr<RandomAccessFile>&& f,
                             std::unique_ptr<BlockAccessCipherStream>&& s,
                             size_t prefixLength)
       : file_(std::move(f)),
@@ -255,13 +252,11 @@ class EncryptedRandomAccessFile : public FSRandomAccessFile {
   //
   // Safe for concurrent use by multiple threads.
   // If Direct I/O enabled, offset, n, and scratch should be aligned properly.
-  IOStatus Read(uint64_t offset, size_t n, const IOOptions& options,
-                Slice* result, char* scratch,
-                IODebugContext* dbg) const override;
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch) const override;
 
   // Readahead the file starting from offset by n bytes for caching.
-  IOStatus Prefetch(uint64_t offset, size_t n, const IOOptions& options,
-                    IODebugContext* dbg) override;
+  virtual Status Prefetch(uint64_t offset, size_t n) override;
 
   // Tries to get an unique ID for this file that will be the same each time
   // the file is opened (and will stay the same while the file is open).
@@ -278,76 +273,71 @@ class EncryptedRandomAccessFile : public FSRandomAccessFile {
   // a single varint.
   //
   // Note: these IDs are only valid for the duration of the process.
-  size_t GetUniqueId(char* id, size_t max_size) const override;
+  virtual size_t GetUniqueId(char* id, size_t max_size) const override;
 
-  void Hint(AccessPattern pattern) override;
+  virtual void Hint(AccessPattern pattern) override;
 
   // Indicates the upper layers if the current RandomAccessFile implementation
   // uses direct IO.
-  bool use_direct_io() const override;
+  virtual bool use_direct_io() const override;
 
   // Use the returned alignment value to allocate
   // aligned buffer for Direct I/O
-  size_t GetRequiredBufferAlignment() const override;
+  virtual size_t GetRequiredBufferAlignment() const override;
 
   // Remove any kind of caching of data from the offset to offset+length
   // of this file. If the length is 0, then it refers to the end of file.
   // If the system is not caching the file contents, then this is a noop.
-  IOStatus InvalidateCache(size_t offset, size_t length) override;
+  virtual Status InvalidateCache(size_t offset, size_t length) override;
 };
 
 // A file abstraction for sequential writing.  The implementation
 // must provide buffering since callers may append small fragments
 // at a time to the file.
-class EncryptedWritableFile : public FSWritableFile {
+class EncryptedWritableFile : public WritableFileWrapper {
  protected:
-  std::unique_ptr<FSWritableFile> file_;
+  std::unique_ptr<WritableFile> file_;
   std::unique_ptr<BlockAccessCipherStream> stream_;
   size_t prefixLength_;
 
  public:
   // Default ctor. Prefix is assumed to be written already.
-  EncryptedWritableFile(std::unique_ptr<FSWritableFile>&& f,
+  EncryptedWritableFile(std::unique_ptr<WritableFile>&& f,
                         std::unique_ptr<BlockAccessCipherStream>&& s,
                         size_t prefixLength)
-      : file_(std::move(f)),
+      : WritableFileWrapper(f.get()),
+        file_(std::move(f)),
         stream_(std::move(s)),
         prefixLength_(prefixLength) {}
 
-  using FSWritableFile::Append;
-  IOStatus Append(const Slice& data, const IOOptions& options,
-                  IODebugContext* dbg) override;
+  Status Append(const Slice& data) override;
 
-  using FSWritableFile::PositionedAppend;
-  IOStatus PositionedAppend(const Slice& data, uint64_t offset,
-                            const IOOptions& options,
-                            IODebugContext* dbg) override;
+  Status PositionedAppend(const Slice& data, uint64_t offset) override;
 
   // Indicates the upper layers if the current WritableFile implementation
   // uses direct IO.
-  bool use_direct_io() const override;
+  virtual bool use_direct_io() const override;
 
   // Use the returned alignment value to allocate
   // aligned buffer for Direct I/O
-  size_t GetRequiredBufferAlignment() const override;
+  virtual size_t GetRequiredBufferAlignment() const override;
 
   /*
    * Get the size of valid data in the file.
    */
-  uint64_t GetFileSize(const IOOptions& options, IODebugContext* dbg) override;
+  virtual uint64_t GetFileSize() override;
 
   // Truncate is necessary to trim the file to the correct size
   // before closing. It is not always possible to keep track of the file
   // size due to whole pages writes. The behavior is undefined if called
   // with other writes to follow.
-  IOStatus Truncate(uint64_t size, const IOOptions& options,
-                    IODebugContext* dbg) override;
+  virtual Status Truncate(uint64_t size) override;
 
   // Remove any kind of caching of data from the offset to offset+length
   // of this file. If the length is 0, then it refers to the end of file.
   // If the system is not caching the file contents, then this is a noop.
   // This call has no effect on dirty pages in the cache.
-  IOStatus InvalidateCache(size_t offset, size_t length) override;
+  virtual Status InvalidateCache(size_t offset, size_t length) override;
 
   // Sync a file range with disk.
   // offset is the starting byte of the file range to be synchronized.
@@ -355,42 +345,28 @@ class EncryptedWritableFile : public FSWritableFile {
   // This asks the OS to initiate flushing the cached data to disk,
   // without waiting for completion.
   // Default implementation does nothing.
-  IOStatus RangeSync(uint64_t offset, uint64_t nbytes, const IOOptions& options,
-                     IODebugContext* dbg) override;
+  virtual Status RangeSync(uint64_t offset, uint64_t nbytes) override;
 
   // PrepareWrite performs any necessary preparation for a write
   // before the write actually occurs.  This allows for pre-allocation
   // of space on devices where it can result in less file
   // fragmentation and/or less waste from over-zealous filesystem
   // pre-allocation.
-  void PrepareWrite(size_t offset, size_t len, const IOOptions& options,
-                    IODebugContext* dbg) override;
-
-  void SetPreallocationBlockSize(size_t size) override;
-
-  void GetPreallocationStatus(size_t* block_size,
-                              size_t* last_allocated_block) override;
+  virtual void PrepareWrite(size_t offset, size_t len) override;
 
   // Pre-allocates space for a file.
-  IOStatus Allocate(uint64_t offset, uint64_t len, const IOOptions& options,
-                    IODebugContext* dbg) override;
-
-  IOStatus Flush(const IOOptions& options, IODebugContext* dbg) override;
-
-  IOStatus Sync(const IOOptions& options, IODebugContext* dbg) override;
-
-  IOStatus Close(const IOOptions& options, IODebugContext* dbg) override;
+  virtual Status Allocate(uint64_t offset, uint64_t len) override;
 };
 
 // A file abstraction for random reading and writing.
-class EncryptedRandomRWFile : public FSRandomRWFile {
+class EncryptedRandomRWFile : public RandomRWFile {
  protected:
-  std::unique_ptr<FSRandomRWFile> file_;
+  std::unique_ptr<RandomRWFile> file_;
   std::unique_ptr<BlockAccessCipherStream> stream_;
   size_t prefixLength_;
 
  public:
-  EncryptedRandomRWFile(std::unique_ptr<FSRandomRWFile>&& f,
+  EncryptedRandomRWFile(std::unique_ptr<RandomRWFile>&& f,
                         std::unique_ptr<BlockAccessCipherStream>&& s,
                         size_t prefixLength)
       : file_(std::move(f)),
@@ -399,49 +375,31 @@ class EncryptedRandomRWFile : public FSRandomRWFile {
 
   // Indicates if the class makes use of direct I/O
   // If false you must pass aligned buffer to Write()
-  bool use_direct_io() const override;
+  virtual bool use_direct_io() const override;
 
   // Use the returned alignment value to allocate
   // aligned buffer for Direct I/O
-  size_t GetRequiredBufferAlignment() const override;
+  virtual size_t GetRequiredBufferAlignment() const override;
 
   // Write bytes in `data` at  offset `offset`, Returns Status::OK() on success.
   // Pass aligned buffer when use_direct_io() returns true.
-  IOStatus Write(uint64_t offset, const Slice& data, const IOOptions& options,
-                 IODebugContext* dbg) override;
+  virtual Status Write(uint64_t offset, const Slice& data) override;
 
   // Read up to `n` bytes starting from offset `offset` and store them in
   // result, provided `scratch` size should be at least `n`.
   // Returns Status::OK() on success.
-  IOStatus Read(uint64_t offset, size_t n, const IOOptions& options,
-                Slice* result, char* scratch,
-                IODebugContext* dbg) const override;
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch) const override;
 
-  IOStatus Flush(const IOOptions& options, IODebugContext* dbg) override;
+  virtual Status Flush() override;
 
-  IOStatus Sync(const IOOptions& options, IODebugContext* dbg) override;
+  virtual Status Sync() override;
 
-  IOStatus Fsync(const IOOptions& options, IODebugContext* dbg) override;
+  virtual Status Fsync() override;
 
-  IOStatus Close(const IOOptions& options, IODebugContext* dbg) override;
+  virtual Status Close() override;
 };
 
-class EncryptedFileSystem : public FileSystemWrapper {
- public:
-  explicit EncryptedFileSystem(const std::shared_ptr<FileSystem>& base)
-      : FileSystemWrapper(base) {}
-  // Method to add a new cipher key for use by the EncryptionProvider.
-  // @param description  Descriptor for this key.
-  // @param cipher       The cryptographic key to use
-  // @param len          The length of the cipher key
-  // @param for_write If true, this cipher should be used for writing files.
-  //                  If false, this cipher should only be used for reading
-  //                  files
-  // @return OK if the cipher was successfully added to the provider, non-OK
-  // otherwise
-  virtual Status AddCipher(const std::string& descriptor, const char* cipher,
-                           size_t len, bool for_write) = 0;
-};
 }  // namespace ROCKSDB_NAMESPACE
 
 #endif  // !defined(ROCKSDB_LITE)

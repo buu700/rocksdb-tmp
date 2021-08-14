@@ -247,21 +247,17 @@ TEST_F(DBTest, SkipDelay) {
       wo.sync = sync;
       wo.disableWAL = disableWAL;
       wo.no_slowdown = true;
-      // Large enough to exceed allowance for one time interval
-      std::string large_value(1024, 'x');
-      // Perhaps ideally this first write would fail because of delay, but
-      // the current implementation does not guarantee that.
-      dbfull()->Put(wo, "foo", large_value).PermitUncheckedError();
+      dbfull()->Put(wo, "foo", "bar");
       // We need the 2nd write to trigger delay. This is because delay is
       // estimated based on the last write size which is 0 for the first write.
-      ASSERT_NOK(dbfull()->Put(wo, "foo2", large_value));
+      ASSERT_NOK(dbfull()->Put(wo, "foo2", "bar2"));
       ASSERT_GE(sleep_count.load(), 0);
       ASSERT_GE(wait_count.load(), 0);
       token.reset();
 
-      token = dbfull()->TEST_write_controler().GetDelayToken(1000000);
+      token = dbfull()->TEST_write_controler().GetDelayToken(1000000000);
       wo.no_slowdown = false;
-      ASSERT_OK(dbfull()->Put(wo, "foo3", large_value));
+      ASSERT_OK(dbfull()->Put(wo, "foo3", "bar3"));
       ASSERT_GE(sleep_count.load(), 1);
       token.reset();
     }
@@ -908,9 +904,6 @@ TEST_F(DBTest, FlushSchedule) {
       static_cast<int64_t>(options.write_buffer_size);
   options.max_write_buffer_number = 2;
   options.write_buffer_size = 120 * 1024;
-  auto flush_listener = std::make_shared<FlushCounterListener>();
-  flush_listener->expected_flush_reason = FlushReason::kWriteBufferFull;
-  options.listeners.push_back(flush_listener);
   CreateAndReopenWithCF({"pikachu"}, options);
   std::vector<port::Thread> threads;
 
@@ -2339,13 +2332,6 @@ TEST_F(DBTest, ReadonlyDBGetLiveManifestSize) {
 }
 
 TEST_F(DBTest, GetLiveBlobFiles) {
-  // Note: the following prevents an otherwise harmless data race between the
-  // test setup code (AddBlobFile) below and the periodic stat dumping thread.
-  Options options = CurrentOptions();
-  options.stats_dump_period_sec = 0;
-
-  Reopen(options);
-
   VersionSet* const versions = dbfull()->TEST_GetVersionSet();
   assert(versions);
   assert(versions->GetColumnFamilySet());
@@ -3507,21 +3493,17 @@ TEST_F(DBTest, FIFOCompactionStyleWithCompactionAndDelete) {
 }
 
 // Check that FIFO-with-TTL is not supported with max_open_files != -1.
-// Github issue #8014
 TEST_F(DBTest, FIFOCompactionWithTTLAndMaxOpenFilesTest) {
-  Options options = CurrentOptions();
+  Options options;
   options.compaction_style = kCompactionStyleFIFO;
   options.create_if_missing = true;
   options.ttl = 600;  // seconds
 
-  // TTL is not supported with max_open_files != -1.
-  options.max_open_files = 0;
-  ASSERT_TRUE(TryReopen(options).IsNotSupported());
-
+  // TTL is now supported with max_open_files != -1.
   options.max_open_files = 100;
-  ASSERT_TRUE(TryReopen(options).IsNotSupported());
+  options = CurrentOptions(options);
+  ASSERT_OK(TryReopen(options));
 
-  // TTL is supported with unlimited max_open_files
   options.max_open_files = -1;
   ASSERT_OK(TryReopen(options));
 }
@@ -5314,45 +5296,41 @@ TEST_F(DBTest, DynamicMiscOptions) {
 #endif  // ROCKSDB_LITE
 
 TEST_F(DBTest, L0L1L2AndUpHitCounter) {
-  const int kNumLevels = 3;
-  const int kNumKeysPerLevel = 10000;
-  const int kNumKeysPerDb = kNumLevels * kNumKeysPerLevel;
-
   Options options = CurrentOptions();
+  options.write_buffer_size = 32 * 1024;
+  options.target_file_size_base = 32 * 1024;
+  options.level0_file_num_compaction_trigger = 2;
+  options.level0_slowdown_writes_trigger = 2;
+  options.level0_stop_writes_trigger = 4;
+  options.max_bytes_for_level_base = 64 * 1024;
+  options.max_write_buffer_number = 2;
+  options.max_background_compactions = 8;
+  options.max_background_flushes = 8;
   options.statistics = ROCKSDB_NAMESPACE::CreateDBStatistics();
-  Reopen(options);
+  CreateAndReopenWithCF({"mypikachu"}, options);
 
-  // After the below loop there will be one file on each of L0, L1, and L2.
-  int key = 0;
-  for (int output_level = kNumLevels - 1; output_level >= 0; --output_level) {
-    for (int i = 0; i < kNumKeysPerLevel; ++i) {
-      ASSERT_OK(Put(Key(key), "val"));
-      key++;
-    }
-    ASSERT_OK(Flush());
-    for (int input_level = 0; input_level < output_level; ++input_level) {
-      // `TEST_CompactRange(input_level, ...)` compacts from `input_level` to
-      // `input_level + 1`.
-      ASSERT_OK(dbfull()->TEST_CompactRange(input_level, nullptr, nullptr));
-    }
+  int numkeys = 20000;
+  for (int i = 0; i < numkeys; i++) {
+    ASSERT_OK(Put(1, Key(i), "val"));
   }
-  assert(key == kNumKeysPerDb);
-
   ASSERT_EQ(0, TestGetTickerCount(options, GET_HIT_L0));
   ASSERT_EQ(0, TestGetTickerCount(options, GET_HIT_L1));
   ASSERT_EQ(0, TestGetTickerCount(options, GET_HIT_L2_AND_UP));
 
-  for (int i = 0; i < kNumKeysPerDb; i++) {
-    ASSERT_EQ(Get(Key(i)), "val");
+  ASSERT_OK(Flush(1));
+  dbfull()->TEST_WaitForCompact();
+
+  for (int i = 0; i < numkeys; i++) {
+    ASSERT_EQ(Get(1, Key(i)), "val");
   }
 
-  ASSERT_EQ(kNumKeysPerLevel, TestGetTickerCount(options, GET_HIT_L0));
-  ASSERT_EQ(kNumKeysPerLevel, TestGetTickerCount(options, GET_HIT_L1));
-  ASSERT_EQ(kNumKeysPerLevel, TestGetTickerCount(options, GET_HIT_L2_AND_UP));
+  ASSERT_GT(TestGetTickerCount(options, GET_HIT_L0), 100);
+  ASSERT_GT(TestGetTickerCount(options, GET_HIT_L1), 100);
+  ASSERT_GT(TestGetTickerCount(options, GET_HIT_L2_AND_UP), 100);
 
-  ASSERT_EQ(kNumKeysPerDb, TestGetTickerCount(options, GET_HIT_L0) +
-                               TestGetTickerCount(options, GET_HIT_L1) +
-                               TestGetTickerCount(options, GET_HIT_L2_AND_UP));
+  ASSERT_EQ(numkeys, TestGetTickerCount(options, GET_HIT_L0) +
+                         TestGetTickerCount(options, GET_HIT_L1) +
+                         TestGetTickerCount(options, GET_HIT_L2_AND_UP));
 }
 
 TEST_F(DBTest, EncodeDecompressedBlockSizeTest) {
@@ -6705,19 +6683,20 @@ TEST_F(DBTest, MemoryUsageWithMaxWriteBufferSizeToMaintain) {
   Reopen(options);
   Random rnd(301);
   bool memory_limit_exceeded = false;
-
-  ColumnFamilyData* cfd =
-      static_cast<ColumnFamilyHandleImpl*>(db_->DefaultColumnFamily())->cfd();
-
+  uint64_t size_all_mem_table = 0;
+  uint64_t cur_active_mem = 0;
   for (int i = 0; i < 1000; i++) {
     std::string value = rnd.RandomString(1000);
     ASSERT_OK(Put("keykey_" + std::to_string(i), value));
 
     dbfull()->TEST_WaitForFlushMemTable();
 
-    const uint64_t cur_active_mem = cfd->mem()->ApproximateMemoryUsage();
-    const uint64_t size_all_mem_table =
-        cur_active_mem + cfd->imm()->ApproximateMemoryUsage();
+    ASSERT_TRUE(db_->GetIntProperty(db_->DefaultColumnFamily(),
+                                    DB::Properties::kSizeAllMemTables,
+                                    &size_all_mem_table));
+    ASSERT_TRUE(db_->GetIntProperty(db_->DefaultColumnFamily(),
+                                    DB::Properties::kCurSizeActiveMemTable,
+                                    &cur_active_mem));
 
     // Errors out if memory usage keeps on increasing beyond the limit.
     // Once memory limit exceeds,  memory_limit_exceeded  is set and if

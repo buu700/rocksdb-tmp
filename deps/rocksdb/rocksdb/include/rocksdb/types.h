@@ -19,13 +19,6 @@ typedef uint64_t SequenceNumber;
 
 const SequenceNumber kMinUnCommittedSeq = 1;  // 0 is always committed
 
-enum class TableFileCreationReason {
-  kFlush,
-  kCompaction,
-  kRecovery,
-  kMisc,
-};
-
 // The types of files RocksDB uses in a DB directory. (Available for
 // advanced options.)
 enum FileType {

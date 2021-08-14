@@ -40,8 +40,7 @@ class TestFileNumberGenerator {
 class BlobFileBuilderTest : public testing::Test {
  protected:
   BlobFileBuilderTest() : mock_env_(Env::Default()) {
-    fs_ = mock_env_.GetFileSystem().get();
-    clock_ = mock_env_.GetSystemClock().get();
+    fs_ = mock_env_.GetFileSystem();
   }
 
   void VerifyBlobFile(uint64_t blob_file_number,
@@ -59,10 +58,11 @@ class BlobFileBuilderTest : public testing::Test {
         fs_->NewRandomAccessFile(blob_file_path, file_options_, &file, dbg));
 
     std::unique_ptr<RandomAccessFileReader> file_reader(
-        new RandomAccessFileReader(std::move(file), blob_file_path, clock_));
+        new RandomAccessFileReader(std::move(file), blob_file_path,
+                                   &mock_env_));
 
     constexpr Statistics* statistics = nullptr;
-    BlobLogSequentialReader blob_log_reader(std::move(file_reader), clock_,
+    BlobLogSequentialReader blob_log_reader(std::move(file_reader), &mock_env_,
                                             statistics);
 
     BlobLogHeader header;
@@ -109,8 +109,7 @@ class BlobFileBuilderTest : public testing::Test {
   }
 
   MockEnv mock_env_;
-  FileSystem* fs_;
-  SystemClock* clock_;
+  std::shared_ptr<FileSystem> fs_;
   FileOptions file_options_;
 };
 
@@ -127,9 +126,8 @@ TEST_F(BlobFileBuilderTest, BuildAndCheckOneFile) {
                             "BlobFileBuilderTest_BuildAndCheckOneFile"),
       0);
   options.enable_blob_files = true;
-  options.env = &mock_env_;
 
-  ImmutableOptions immutable_options(options);
+  ImmutableCFOptions immutable_cf_options(options);
   MutableCFOptions mutable_cf_options(options);
 
   constexpr int job_id = 1;
@@ -141,11 +139,11 @@ TEST_F(BlobFileBuilderTest, BuildAndCheckOneFile) {
   std::vector<std::string> blob_file_paths;
   std::vector<BlobFileAddition> blob_file_additions;
 
-  BlobFileBuilder builder(
-      TestFileNumberGenerator(), fs_, &immutable_options, &mutable_cf_options,
-      &file_options_, job_id, column_family_id, column_family_name, io_priority,
-      write_hint, nullptr /*IOTracer*/, nullptr /*BlobFileCompletionCallback*/,
-      &blob_file_paths, &blob_file_additions);
+  BlobFileBuilder builder(TestFileNumberGenerator(), &mock_env_, fs_.get(),
+                          &immutable_cf_options, &mutable_cf_options,
+                          &file_options_, job_id, column_family_id,
+                          column_family_name, io_priority, write_hint,
+                          &blob_file_paths, &blob_file_additions);
 
   std::vector<std::pair<std::string, std::string>> expected_key_value_pairs(
       number_of_blobs);
@@ -177,9 +175,9 @@ TEST_F(BlobFileBuilderTest, BuildAndCheckOneFile) {
 
   const std::string& blob_file_path = blob_file_paths[0];
 
-  ASSERT_EQ(
-      blob_file_path,
-      BlobFileName(immutable_options.cf_paths.front().path, blob_file_number));
+  ASSERT_EQ(blob_file_path,
+            BlobFileName(immutable_cf_options.cf_paths.front().path,
+                         blob_file_number));
 
   ASSERT_EQ(blob_file_additions.size(), 1);
 
@@ -211,9 +209,8 @@ TEST_F(BlobFileBuilderTest, BuildAndCheckMultipleFiles) {
       0);
   options.enable_blob_files = true;
   options.blob_file_size = value_size;
-  options.env = &mock_env_;
 
-  ImmutableOptions immutable_options(options);
+  ImmutableCFOptions immutable_cf_options(options);
   MutableCFOptions mutable_cf_options(options);
 
   constexpr int job_id = 1;
@@ -225,11 +222,11 @@ TEST_F(BlobFileBuilderTest, BuildAndCheckMultipleFiles) {
   std::vector<std::string> blob_file_paths;
   std::vector<BlobFileAddition> blob_file_additions;
 
-  BlobFileBuilder builder(
-      TestFileNumberGenerator(), fs_, &immutable_options, &mutable_cf_options,
-      &file_options_, job_id, column_family_id, column_family_name, io_priority,
-      write_hint, nullptr /*IOTracer*/, nullptr /*BlobFileCompletionCallback*/,
-      &blob_file_paths, &blob_file_additions);
+  BlobFileBuilder builder(TestFileNumberGenerator(), &mock_env_, fs_.get(),
+                          &immutable_cf_options, &mutable_cf_options,
+                          &file_options_, job_id, column_family_id,
+                          column_family_name, io_priority, write_hint,
+                          &blob_file_paths, &blob_file_additions);
 
   std::vector<std::pair<std::string, std::string>> expected_key_value_pairs(
       number_of_blobs);
@@ -262,7 +259,7 @@ TEST_F(BlobFileBuilderTest, BuildAndCheckMultipleFiles) {
     const uint64_t blob_file_number = i + 2;
 
     ASSERT_EQ(blob_file_paths[i],
-              BlobFileName(immutable_options.cf_paths.front().path,
+              BlobFileName(immutable_cf_options.cf_paths.front().path,
                            blob_file_number));
 
     const auto& blob_file_addition = blob_file_additions[i];
@@ -297,9 +294,8 @@ TEST_F(BlobFileBuilderTest, InlinedValues) {
       0);
   options.enable_blob_files = true;
   options.min_blob_size = 1024;
-  options.env = &mock_env_;
 
-  ImmutableOptions immutable_options(options);
+  ImmutableCFOptions immutable_cf_options(options);
   MutableCFOptions mutable_cf_options(options);
 
   constexpr int job_id = 1;
@@ -311,11 +307,11 @@ TEST_F(BlobFileBuilderTest, InlinedValues) {
   std::vector<std::string> blob_file_paths;
   std::vector<BlobFileAddition> blob_file_additions;
 
-  BlobFileBuilder builder(
-      TestFileNumberGenerator(), fs_, &immutable_options, &mutable_cf_options,
-      &file_options_, job_id, column_family_id, column_family_name, io_priority,
-      write_hint, nullptr /*IOTracer*/, nullptr /*BlobFileCompletionCallback*/,
-      &blob_file_paths, &blob_file_additions);
+  BlobFileBuilder builder(TestFileNumberGenerator(), &mock_env_, fs_.get(),
+                          &immutable_cf_options, &mutable_cf_options,
+                          &file_options_, job_id, column_family_id,
+                          column_family_name, io_priority, write_hint,
+                          &blob_file_paths, &blob_file_additions);
 
   for (size_t i = 0; i < number_of_blobs; ++i) {
     const std::string key = std::to_string(i);
@@ -350,9 +346,8 @@ TEST_F(BlobFileBuilderTest, Compression) {
       test::PerThreadDBPath(&mock_env_, "BlobFileBuilderTest_Compression"), 0);
   options.enable_blob_files = true;
   options.blob_compression_type = kSnappyCompression;
-  options.env = &mock_env_;
 
-  ImmutableOptions immutable_options(options);
+  ImmutableCFOptions immutable_cf_options(options);
   MutableCFOptions mutable_cf_options(options);
 
   constexpr int job_id = 1;
@@ -364,11 +359,11 @@ TEST_F(BlobFileBuilderTest, Compression) {
   std::vector<std::string> blob_file_paths;
   std::vector<BlobFileAddition> blob_file_additions;
 
-  BlobFileBuilder builder(
-      TestFileNumberGenerator(), fs_, &immutable_options, &mutable_cf_options,
-      &file_options_, job_id, column_family_id, column_family_name, io_priority,
-      write_hint, nullptr /*IOTracer*/, nullptr /*BlobFileCompletionCallback*/,
-      &blob_file_paths, &blob_file_additions);
+  BlobFileBuilder builder(TestFileNumberGenerator(), &mock_env_, fs_.get(),
+                          &immutable_cf_options, &mutable_cf_options,
+                          &file_options_, job_id, column_family_id,
+                          column_family_name, io_priority, write_hint,
+                          &blob_file_paths, &blob_file_additions);
 
   const std::string key("1");
   const std::string uncompressed_value(value_size, 'x');
@@ -387,9 +382,9 @@ TEST_F(BlobFileBuilderTest, Compression) {
 
   const std::string& blob_file_path = blob_file_paths[0];
 
-  ASSERT_EQ(
-      blob_file_path,
-      BlobFileName(immutable_options.cf_paths.front().path, blob_file_number));
+  ASSERT_EQ(blob_file_path,
+            BlobFileName(immutable_cf_options.cf_paths.front().path,
+                         blob_file_number));
 
   ASSERT_EQ(blob_file_additions.size(), 1);
 
@@ -433,8 +428,8 @@ TEST_F(BlobFileBuilderTest, CompressionError) {
       0);
   options.enable_blob_files = true;
   options.blob_compression_type = kSnappyCompression;
-  options.env = &mock_env_;
-  ImmutableOptions immutable_options(options);
+
+  ImmutableCFOptions immutable_cf_options(options);
   MutableCFOptions mutable_cf_options(options);
 
   constexpr int job_id = 1;
@@ -446,11 +441,11 @@ TEST_F(BlobFileBuilderTest, CompressionError) {
   std::vector<std::string> blob_file_paths;
   std::vector<BlobFileAddition> blob_file_additions;
 
-  BlobFileBuilder builder(
-      TestFileNumberGenerator(), fs_, &immutable_options, &mutable_cf_options,
-      &file_options_, job_id, column_family_id, column_family_name, io_priority,
-      write_hint, nullptr /*IOTracer*/, nullptr /*BlobFileCompletionCallback*/,
-      &blob_file_paths, &blob_file_additions);
+  BlobFileBuilder builder(TestFileNumberGenerator(), &mock_env_, fs_.get(),
+                          &immutable_cf_options, &mutable_cf_options,
+                          &file_options_, job_id, column_family_id,
+                          column_family_name, io_priority, write_hint,
+                          &blob_file_paths, &blob_file_additions);
 
   SyncPoint::GetInstance()->SetCallBack("CompressData:TamperWithReturnValue",
                                         [](void* arg) {
@@ -472,9 +467,9 @@ TEST_F(BlobFileBuilderTest, CompressionError) {
   constexpr uint64_t blob_file_number = 2;
 
   ASSERT_EQ(blob_file_paths.size(), 1);
-  ASSERT_EQ(
-      blob_file_paths[0],
-      BlobFileName(immutable_options.cf_paths.front().path, blob_file_number));
+  ASSERT_EQ(blob_file_paths[0],
+            BlobFileName(immutable_cf_options.cf_paths.front().path,
+                         blob_file_number));
 
   ASSERT_TRUE(blob_file_additions.empty());
 }
@@ -510,9 +505,8 @@ TEST_F(BlobFileBuilderTest, Checksum) {
   options.enable_blob_files = true;
   options.file_checksum_gen_factory =
       std::make_shared<DummyFileChecksumGenFactory>();
-  options.env = &mock_env_;
 
-  ImmutableOptions immutable_options(options);
+  ImmutableCFOptions immutable_cf_options(options);
   MutableCFOptions mutable_cf_options(options);
 
   constexpr int job_id = 1;
@@ -524,11 +518,11 @@ TEST_F(BlobFileBuilderTest, Checksum) {
   std::vector<std::string> blob_file_paths;
   std::vector<BlobFileAddition> blob_file_additions;
 
-  BlobFileBuilder builder(
-      TestFileNumberGenerator(), fs_, &immutable_options, &mutable_cf_options,
-      &file_options_, job_id, column_family_id, column_family_name, io_priority,
-      write_hint, nullptr /*IOTracer*/, nullptr /*BlobFileCompletionCallback*/,
-      &blob_file_paths, &blob_file_additions);
+  BlobFileBuilder builder(TestFileNumberGenerator(), &mock_env_, fs_.get(),
+                          &immutable_cf_options, &mutable_cf_options,
+                          &file_options_, job_id, column_family_id,
+                          column_family_name, io_priority, write_hint,
+                          &blob_file_paths, &blob_file_additions);
 
   const std::string key("1");
   const std::string value("deadbeef");
@@ -547,9 +541,9 @@ TEST_F(BlobFileBuilderTest, Checksum) {
 
   const std::string& blob_file_path = blob_file_paths[0];
 
-  ASSERT_EQ(
-      blob_file_path,
-      BlobFileName(immutable_options.cf_paths.front().path, blob_file_number));
+  ASSERT_EQ(blob_file_path,
+            BlobFileName(immutable_cf_options.cf_paths.front().path,
+                         blob_file_number));
 
   ASSERT_EQ(blob_file_additions.size(), 1);
 
@@ -577,11 +571,13 @@ class BlobFileBuilderIOErrorTest
  protected:
   BlobFileBuilderIOErrorTest()
       : mock_env_(Env::Default()),
-        fs_(mock_env_.GetFileSystem().get()),
+        fault_injection_env_(&mock_env_),
+        fs_(fault_injection_env_.GetFileSystem()),
         sync_point_(GetParam()) {}
 
   MockEnv mock_env_;
-  FileSystem* fs_;
+  FaultInjectionTestEnv fault_injection_env_;
+  std::shared_ptr<FileSystem> fs_;
   FileOptions file_options_;
   std::string sync_point_;
 };
@@ -602,13 +598,13 @@ TEST_P(BlobFileBuilderIOErrorTest, IOError) {
 
   Options options;
   options.cf_paths.emplace_back(
-      test::PerThreadDBPath(&mock_env_, "BlobFileBuilderIOErrorTest_IOError"),
+      test::PerThreadDBPath(&fault_injection_env_,
+                            "BlobFileBuilderIOErrorTest_IOError"),
       0);
   options.enable_blob_files = true;
   options.blob_file_size = value_size;
-  options.env = &mock_env_;
 
-  ImmutableOptions immutable_options(options);
+  ImmutableCFOptions immutable_cf_options(options);
   MutableCFOptions mutable_cf_options(options);
 
   constexpr int job_id = 1;
@@ -620,17 +616,15 @@ TEST_P(BlobFileBuilderIOErrorTest, IOError) {
   std::vector<std::string> blob_file_paths;
   std::vector<BlobFileAddition> blob_file_additions;
 
-  BlobFileBuilder builder(
-      TestFileNumberGenerator(), fs_, &immutable_options, &mutable_cf_options,
-      &file_options_, job_id, column_family_id, column_family_name, io_priority,
-      write_hint, nullptr /*IOTracer*/, nullptr /*BlobFileCompletionCallback*/,
-      &blob_file_paths, &blob_file_additions);
+  BlobFileBuilder builder(TestFileNumberGenerator(), &fault_injection_env_,
+                          fs_.get(), &immutable_cf_options, &mutable_cf_options,
+                          &file_options_, job_id, column_family_id,
+                          column_family_name, io_priority, write_hint,
+                          &blob_file_paths, &blob_file_additions);
 
-  SyncPoint::GetInstance()->SetCallBack(sync_point_, [this](void* arg) {
-    Status* const s = static_cast<Status*>(arg);
-    assert(s);
-
-    (*s) = Status::IOError(sync_point_);
+  SyncPoint::GetInstance()->SetCallBack(sync_point_, [this](void* /* arg */) {
+    fault_injection_env_.SetFilesystemActive(false,
+                                             Status::IOError(sync_point_));
   });
   SyncPoint::GetInstance()->EnableProcessing();
 
@@ -651,7 +645,7 @@ TEST_P(BlobFileBuilderIOErrorTest, IOError) {
 
     ASSERT_EQ(blob_file_paths.size(), 1);
     ASSERT_EQ(blob_file_paths[0],
-              BlobFileName(immutable_options.cf_paths.front().path,
+              BlobFileName(immutable_cf_options.cf_paths.front().path,
                            blob_file_number));
   }
 

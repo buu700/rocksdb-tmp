@@ -25,7 +25,6 @@ class Iterator;
 class Logger;
 class MergeOperator;
 class Statistics;
-class SystemClock;
 
 class MergeHelper {
  public:
@@ -49,7 +48,7 @@ class MergeHelper {
                                const Slice& key, const Slice* value,
                                const std::vector<Slice>& operands,
                                std::string* result, Logger* logger,
-                               Statistics* statistics, SystemClock* clock,
+                               Statistics* statistics, Env* env,
                                Slice* result_operand = nullptr,
                                bool update_num_ops_stats = false);
 
@@ -141,7 +140,6 @@ class MergeHelper {
 
  private:
   Env* env_;
-  SystemClock* clock_;
   const Comparator* user_comparator_;
   const MergeOperator* user_merge_operator_;
   const CompactionFilter* compaction_filter_;

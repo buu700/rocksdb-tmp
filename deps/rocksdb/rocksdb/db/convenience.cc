@@ -44,7 +44,7 @@ Status VerifySstFileChecksum(const Options& options,
   std::unique_ptr<FSRandomAccessFile> file;
   uint64_t file_size;
   InternalKeyComparator internal_comparator(options.comparator);
-  ImmutableOptions ioptions(options);
+  ImmutableCFOptions ioptions(options);
 
   Status s = ioptions.fs->NewRandomAccessFile(file_path,
                                               FileOptions(env_options),

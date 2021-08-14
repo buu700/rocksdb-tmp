@@ -58,7 +58,7 @@ class PartitionedFilterBlockTest
       virtual public ::testing::WithParamInterface<uint32_t> {
  public:
   Options options_;
-  ImmutableOptions ioptions_;
+  ImmutableCFOptions ioptions_;
   EnvOptions env_options_;
   BlockBasedTableOptions table_options_;
   InternalKeyComparator icomp_;

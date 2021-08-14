@@ -53,16 +53,13 @@ struct WriteBatchWithIndex::Rep {
   // In overwrite mode, find the existing entry for the same key and update it
   // to point to the current entry.
   // Return true if the key is found and updated.
-  bool UpdateExistingEntry(ColumnFamilyHandle* column_family, const Slice& key,
-                           WriteType type);
-  bool UpdateExistingEntryWithCfId(uint32_t column_family_id, const Slice& key,
-                                   WriteType type);
+  bool UpdateExistingEntry(ColumnFamilyHandle* column_family, const Slice& key);
+  bool UpdateExistingEntryWithCfId(uint32_t column_family_id, const Slice& key);
 
   // Add the recent entry to the update.
   // In overwrite mode, if key already exists in the index, update it.
-  void AddOrUpdateIndex(ColumnFamilyHandle* column_family, const Slice& key,
-                        WriteType type);
-  void AddOrUpdateIndex(const Slice& key, WriteType type);
+  void AddOrUpdateIndex(ColumnFamilyHandle* column_family, const Slice& key);
+  void AddOrUpdateIndex(const Slice& key);
 
   // Allocate an index entry pointing to the last entry in the write batch and
   // put it to skip list.
@@ -78,13 +75,13 @@ struct WriteBatchWithIndex::Rep {
 };
 
 bool WriteBatchWithIndex::Rep::UpdateExistingEntry(
-    ColumnFamilyHandle* column_family, const Slice& key, WriteType type) {
+    ColumnFamilyHandle* column_family, const Slice& key) {
   uint32_t cf_id = GetColumnFamilyID(column_family);
-  return UpdateExistingEntryWithCfId(cf_id, key, type);
+  return UpdateExistingEntryWithCfId(cf_id, key);
 }
 
 bool WriteBatchWithIndex::Rep::UpdateExistingEntryWithCfId(
-    uint32_t column_family_id, const Slice& key, WriteType type) {
+    uint32_t column_family_id, const Slice& key) {
   if (!overwrite_key) {
     return false;
   }
@@ -94,16 +91,9 @@ bool WriteBatchWithIndex::Rep::UpdateExistingEntryWithCfId(
   iter.Seek(key);
   if (!iter.Valid()) {
     return false;
-  } else if (!iter.MatchesKey(column_family_id, key)) {
+  }
+  if (!iter.MatchesKey(column_family_id, key)) {
     return false;
-  } else {
-    // Move to the end of this key (NextKey-Prev)
-    iter.NextKey();  // Move to the next key
-    if (iter.Valid()) {
-      iter.Prev();  // Move back one entry
-    } else {
-      iter.SeekToLast();
-    }
   }
   WriteBatchIndexEntry* non_const_entry =
       const_cast<WriteBatchIndexEntry*>(iter.GetRawEntry());
@@ -111,17 +101,13 @@ bool WriteBatchWithIndex::Rep::UpdateExistingEntryWithCfId(
     last_sub_batch_offset = last_entry_offset;
     sub_batch_cnt++;
   }
-  if (type == kMergeRecord) {
-    return false;
-  } else {
-    non_const_entry->offset = last_entry_offset;
-    return true;
-  }
+  non_const_entry->offset = last_entry_offset;
+  return true;
 }
 
 void WriteBatchWithIndex::Rep::AddOrUpdateIndex(
-    ColumnFamilyHandle* column_family, const Slice& key, WriteType type) {
-  if (!UpdateExistingEntry(column_family, key, type)) {
+    ColumnFamilyHandle* column_family, const Slice& key) {
+  if (!UpdateExistingEntry(column_family, key)) {
     uint32_t cf_id = GetColumnFamilyID(column_family);
     const auto* cf_cmp = GetColumnFamilyUserComparator(column_family);
     if (cf_cmp != nullptr) {
@@ -131,9 +117,8 @@ void WriteBatchWithIndex::Rep::AddOrUpdateIndex(
   }
 }
 
-void WriteBatchWithIndex::Rep::AddOrUpdateIndex(const Slice& key,
-                                                WriteType type) {
-  if (!UpdateExistingEntryWithCfId(0, key, type)) {
+void WriteBatchWithIndex::Rep::AddOrUpdateIndex(const Slice& key) {
+  if (!UpdateExistingEntryWithCfId(0, key)) {
     AddNewEntry(0);
   }
 }
@@ -205,31 +190,14 @@ Status WriteBatchWithIndex::Rep::ReBuildIndex() {
     switch (tag) {
       case kTypeColumnFamilyValue:
       case kTypeValue:
-        found++;
-        if (!UpdateExistingEntryWithCfId(column_family_id, key, kPutRecord)) {
-          AddNewEntry(column_family_id);
-        }
-        break;
       case kTypeColumnFamilyDeletion:
       case kTypeDeletion:
-        found++;
-        if (!UpdateExistingEntryWithCfId(column_family_id, key,
-                                         kDeleteRecord)) {
-          AddNewEntry(column_family_id);
-        }
-        break;
       case kTypeColumnFamilySingleDeletion:
       case kTypeSingleDeletion:
-        found++;
-        if (!UpdateExistingEntryWithCfId(column_family_id, key,
-                                         kSingleDeleteRecord)) {
-          AddNewEntry(column_family_id);
-        }
-        break;
       case kTypeColumnFamilyMerge:
       case kTypeMerge:
         found++;
-        if (!UpdateExistingEntryWithCfId(column_family_id, key, kMergeRecord)) {
+        if (!UpdateExistingEntryWithCfId(column_family_id, key)) {
           AddNewEntry(column_family_id);
         }
         break;
@@ -287,19 +255,22 @@ WBWIIterator* WriteBatchWithIndex::NewIterator(
 Iterator* WriteBatchWithIndex::NewIteratorWithBase(
     ColumnFamilyHandle* column_family, Iterator* base_iterator,
     const ReadOptions* read_options) {
-  auto wbwiii =
-      new WBWIIteratorImpl(GetColumnFamilyID(column_family), &(rep->skip_list),
-                           &rep->write_batch, &rep->comparator);
-  return new BaseDeltaIterator(column_family, base_iterator, wbwiii,
+  if (rep->overwrite_key == false) {
+    assert(false);
+    return nullptr;
+  }
+  return new BaseDeltaIterator(base_iterator, NewIterator(column_family),
                                GetColumnFamilyUserComparator(column_family),
                                read_options);
 }
 
 Iterator* WriteBatchWithIndex::NewIteratorWithBase(Iterator* base_iterator) {
+  if (rep->overwrite_key == false) {
+    assert(false);
+    return nullptr;
+  }
   // default column family's comparator
-  auto wbwiii = new WBWIIteratorImpl(0, &(rep->skip_list), &rep->write_batch,
-                                     &rep->comparator);
-  return new BaseDeltaIterator(nullptr, base_iterator, wbwiii,
+  return new BaseDeltaIterator(base_iterator, NewIterator(),
                                rep->comparator.default_comparator());
 }
 
@@ -308,7 +279,7 @@ Status WriteBatchWithIndex::Put(ColumnFamilyHandle* column_family,
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.Put(column_family, key, value);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(column_family, key, kPutRecord);
+    rep->AddOrUpdateIndex(column_family, key);
   }
   return s;
 }
@@ -317,7 +288,7 @@ Status WriteBatchWithIndex::Put(const Slice& key, const Slice& value) {
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.Put(key, value);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(key, kPutRecord);
+    rep->AddOrUpdateIndex(key);
   }
   return s;
 }
@@ -327,7 +298,7 @@ Status WriteBatchWithIndex::Delete(ColumnFamilyHandle* column_family,
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.Delete(column_family, key);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(column_family, key, kDeleteRecord);
+    rep->AddOrUpdateIndex(column_family, key);
   }
   return s;
 }
@@ -336,7 +307,7 @@ Status WriteBatchWithIndex::Delete(const Slice& key) {
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.Delete(key);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(key, kDeleteRecord);
+    rep->AddOrUpdateIndex(key);
   }
   return s;
 }
@@ -346,7 +317,7 @@ Status WriteBatchWithIndex::SingleDelete(ColumnFamilyHandle* column_family,
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.SingleDelete(column_family, key);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(column_family, key, kSingleDeleteRecord);
+    rep->AddOrUpdateIndex(column_family, key);
   }
   return s;
 }
@@ -355,7 +326,7 @@ Status WriteBatchWithIndex::SingleDelete(const Slice& key) {
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.SingleDelete(key);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(key, kSingleDeleteRecord);
+    rep->AddOrUpdateIndex(key);
   }
   return s;
 }
@@ -365,7 +336,7 @@ Status WriteBatchWithIndex::Merge(ColumnFamilyHandle* column_family,
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.Merge(column_family, key, value);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(column_family, key, kMergeRecord);
+    rep->AddOrUpdateIndex(column_family, key);
   }
   return s;
 }
@@ -374,7 +345,7 @@ Status WriteBatchWithIndex::Merge(const Slice& key, const Slice& value) {
   rep->SetLastEntryOffset();
   auto s = rep->write_batch.Merge(key, value);
   if (s.ok()) {
-    rep->AddOrUpdateIndex(key, kMergeRecord);
+    rep->AddOrUpdateIndex(key);
   }
   return s;
 }
@@ -390,18 +361,18 @@ Status WriteBatchWithIndex::GetFromBatch(ColumnFamilyHandle* column_family,
                                          const Slice& key, std::string* value) {
   Status s;
   WriteBatchWithIndexInternal wbwii(&options, column_family);
-  auto result = wbwii.GetFromBatch(this, key, value, &s);
+  auto result = wbwii.GetFromBatch(this, key, value, rep->overwrite_key, &s);
 
   switch (result) {
-    case WBWIIteratorImpl::kFound:
-    case WBWIIteratorImpl::kError:
+    case WriteBatchWithIndexInternal::Result::kFound:
+    case WriteBatchWithIndexInternal::Result::kError:
       // use returned status
       break;
-    case WBWIIteratorImpl::kDeleted:
-    case WBWIIteratorImpl::kNotFound:
+    case WriteBatchWithIndexInternal::Result::kDeleted:
+    case WriteBatchWithIndexInternal::Result::kNotFound:
       s = Status::NotFound();
       break;
-    case WBWIIteratorImpl::kMergeInProgress:
+    case WriteBatchWithIndexInternal::Result::kMergeInProgress:
       s = Status::MergeInProgress();
       break;
     default:
@@ -469,18 +440,29 @@ Status WriteBatchWithIndex::GetFromBatchAndDB(
   // we cannot pin it as otherwise the returned value will not be available
   // after the transaction finishes.
   std::string& batch_value = *pinnable_val->GetSelf();
-  auto result = wbwii.GetFromBatch(this, key, &batch_value, &s);
+  auto result =
+      wbwii.GetFromBatch(this, key, &batch_value, rep->overwrite_key, &s);
 
-  if (result == WBWIIteratorImpl::kFound) {
+  if (result == WriteBatchWithIndexInternal::Result::kFound) {
     pinnable_val->PinSelf();
     return s;
-  } else if (!s.ok() || result == WBWIIteratorImpl::kError) {
-    return s;
-  } else if (result == WBWIIteratorImpl::kDeleted) {
+  }
+  if (result == WriteBatchWithIndexInternal::Result::kDeleted) {
     return Status::NotFound();
   }
-  assert(result == WBWIIteratorImpl::kMergeInProgress ||
-         result == WBWIIteratorImpl::kNotFound);
+  if (result == WriteBatchWithIndexInternal::Result::kError) {
+    return s;
+  }
+  if (result == WriteBatchWithIndexInternal::Result::kMergeInProgress &&
+      rep->overwrite_key == true) {
+    // Since we've overwritten keys, we do not know what other operations are
+    // in this batch for this key, so we cannot do a Merge to compute the
+    // result.  Instead, we will simply return MergeInProgress.
+    return Status::MergeInProgress();
+  }
+
+  assert(result == WriteBatchWithIndexInternal::Result::kMergeInProgress ||
+         result == WriteBatchWithIndexInternal::Result::kNotFound);
 
   // Did not find key in batch OR could not resolve Merges.  Try DB.
   if (!callback) {
@@ -495,7 +477,7 @@ Status WriteBatchWithIndex::GetFromBatchAndDB(
   }
 
   if (s.ok() || s.IsNotFound()) {  // DB Get Succeeded
-    if (result == WBWIIteratorImpl::kMergeInProgress) {
+    if (result == WriteBatchWithIndexInternal::Result::kMergeInProgress) {
       // Merge result from DB with merges in Batch
       std::string merge_result;
       if (s.ok()) {
@@ -531,7 +513,7 @@ void WriteBatchWithIndex::MultiGetFromBatchAndDB(
   autovector<KeyContext, MultiGetContext::MAX_BATCH_SIZE> key_context;
   autovector<KeyContext*, MultiGetContext::MAX_BATCH_SIZE> sorted_keys;
   // To hold merges from the write batch
-  autovector<std::pair<WBWIIteratorImpl::Result, MergeContext>,
+  autovector<std::pair<WriteBatchWithIndexInternal::Result, MergeContext>,
              MultiGetContext::MAX_BATCH_SIZE>
       merges;
   // Since the lifetime of the WriteBatch is the same as that of the transaction
@@ -539,27 +521,34 @@ void WriteBatchWithIndex::MultiGetFromBatchAndDB(
   // after the transaction finishes.
   for (size_t i = 0; i < num_keys; ++i) {
     MergeContext merge_context;
-    std::string batch_value;
-    Status* s = &statuses[i];
     PinnableSlice* pinnable_val = &values[i];
-    pinnable_val->Reset();
-    auto result =
-        wbwii.GetFromBatch(this, keys[i], &merge_context, &batch_value, s);
+    std::string& batch_value = *pinnable_val->GetSelf();
+    Status* s = &statuses[i];
+    auto result = wbwii.GetFromBatch(this, keys[i], &merge_context,
+                                     &batch_value, rep->overwrite_key, s);
 
-    if (result == WBWIIteratorImpl::kFound) {
-      *pinnable_val->GetSelf() = std::move(batch_value);
+    if (result == WriteBatchWithIndexInternal::Result::kFound) {
       pinnable_val->PinSelf();
       continue;
     }
-    if (result == WBWIIteratorImpl::kDeleted) {
+    if (result == WriteBatchWithIndexInternal::Result::kDeleted) {
       *s = Status::NotFound();
       continue;
     }
-    if (result == WBWIIteratorImpl::kError) {
+    if (result == WriteBatchWithIndexInternal::Result::kError) {
       continue;
     }
-    assert(result == WBWIIteratorImpl::kMergeInProgress ||
-           result == WBWIIteratorImpl::kNotFound);
+    if (result == WriteBatchWithIndexInternal::Result::kMergeInProgress &&
+        rep->overwrite_key == true) {
+      // Since we've overwritten keys, we do not know what other operations are
+      // in this batch for this key, so we cannot do a Merge to compute the
+      // result.  Instead, we will simply return MergeInProgress.
+      *s = Status::MergeInProgress();
+      continue;
+    }
+
+    assert(result == WriteBatchWithIndexInternal::Result::kMergeInProgress ||
+           result == WriteBatchWithIndexInternal::Result::kNotFound);
     key_context.emplace_back(column_family, keys[i], &values[i],
                              /*timestamp*/ nullptr, &statuses[i]);
     merges.emplace_back(result, std::move(merge_context));
@@ -580,23 +569,19 @@ void WriteBatchWithIndex::MultiGetFromBatchAndDB(
     KeyContext& key = *iter;
     if (key.s->ok() || key.s->IsNotFound()) {  // DB Get Succeeded
       size_t index = iter - key_context.begin();
-      std::pair<WBWIIteratorImpl::Result, MergeContext>& merge_result =
-          merges[index];
-      if (merge_result.first == WBWIIteratorImpl::kMergeInProgress) {
-        std::string merged_value;
+      std::pair<WriteBatchWithIndexInternal::Result, MergeContext>&
+          merge_result = merges[index];
+      if (merge_result.first ==
+          WriteBatchWithIndexInternal::Result::kMergeInProgress) {
         // Merge result from DB with merges in Batch
         if (key.s->ok()) {
           *key.s = wbwii.MergeKey(*key.key, iter->value, merge_result.second,
-                                  &merged_value);
+                                  key.value->GetSelf());
         } else {  // Key not present in db (s.IsNotFound())
           *key.s = wbwii.MergeKey(*key.key, nullptr, merge_result.second,
-                                  &merged_value);
+                                  key.value->GetSelf());
         }
-        if (key.s->ok()) {
-          key.value->Reset();
-          *key.value->GetSelf() = std::move(merged_value);
-          key.value->PinSelf();
-        }
+        key.value->PinSelf();
       }
     }
   }

@@ -23,7 +23,7 @@ struct SuperVersion;
 struct SuperVersionContext {
   struct WriteStallNotification {
     WriteStallInfo write_stall_info;
-    const ImmutableOptions* immutable_options;
+    const ImmutableCFOptions* immutable_cf_options;
   };
 
   autovector<SuperVersion*> superversions_to_free;
@@ -57,16 +57,15 @@ struct SuperVersionContext {
 #endif
   }
 
-  void PushWriteStallNotification(WriteStallCondition old_cond,
-                                  WriteStallCondition new_cond,
-                                  const std::string& name,
-                                  const ImmutableOptions* ioptions) {
+  void PushWriteStallNotification(
+      WriteStallCondition old_cond, WriteStallCondition new_cond,
+      const std::string& name, const ImmutableCFOptions* ioptions) {
 #if !defined(ROCKSDB_LITE) && !defined(ROCKSDB_DISABLE_STALL_NOTIFICATION)
     WriteStallNotification notif;
     notif.write_stall_info.cf_name = name;
     notif.write_stall_info.condition.prev = old_cond;
     notif.write_stall_info.condition.cur = new_cond;
-    notif.immutable_options = ioptions;
+    notif.immutable_cf_options = ioptions;
     write_stall_notifications.push_back(notif);
 #else
     (void)old_cond;
@@ -80,7 +79,7 @@ struct SuperVersionContext {
 #if !defined(ROCKSDB_LITE) && !defined(ROCKSDB_DISABLE_STALL_NOTIFICATION)
     // notify listeners on changed write stall conditions
     for (auto& notif : write_stall_notifications) {
-      for (auto& listener : notif.immutable_options->listeners) {
+      for (auto& listener : notif.immutable_cf_options->listeners) {
         listener->OnStallConditionsChanged(notif.write_stall_info);
       }
     }

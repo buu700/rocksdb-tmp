@@ -21,7 +21,6 @@
 #include "util/bloom_impl.h"
 #include "util/coding.h"
 #include "util/hash.h"
-#include "util/ribbon_config.h"
 #include "util/ribbon_impl.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -61,10 +60,6 @@ class XXH3pFilterBitsBuilder : public BuiltinFilterBitsBuilder {
     if (hash_entries_.empty() || hash != hash_entries_.back()) {
       hash_entries_.push_back(hash);
     }
-  }
-
-  virtual size_t EstimateEntriesAdded() override {
-    return hash_entries_.size();
   }
 
  protected:
@@ -404,7 +399,6 @@ struct Standard128RibbonRehasherTypesAndSettings {
   // These are schema-critical. Any change almost certainly changes
   // underlying data.
   static constexpr bool kIsFilter = true;
-  static constexpr bool kHomogeneous = false;
   static constexpr bool kFirstCoeffAlwaysOne = true;
   static constexpr bool kUseSmash = false;
   using CoeffRow = ROCKSDB_NAMESPACE::Unsigned128;
@@ -604,7 +598,8 @@ class Standard128RibbonBitsBuilder : public XXH3pFilterBitsBuilder {
 
     // Let's not bother accounting for overflow to Bloom filter
     // (Includes NaN case)
-    if (!(max_slots < ConfigHelper::GetNumSlots(kMaxRibbonEntries))) {
+    if (!(max_slots <
+          BandingType::GetNumSlotsFor95PctSuccess(kMaxRibbonEntries))) {
       return kMaxRibbonEntries;
     }
 
@@ -633,7 +628,12 @@ class Standard128RibbonBitsBuilder : public XXH3pFilterBitsBuilder {
       slots = SolnType::RoundDownNumSlots(slots - 1);
     }
 
-    uint32_t num_entries = ConfigHelper::GetNumToAdd(slots);
+    // Using slots instead of entries to get overhead factor estimate
+    double f = BandingType::GetFactorFor95PctSuccess(slots);
+    uint32_t num_entries = static_cast<uint32_t>(slots / f);
+    // Improve precision with another round
+    f = BandingType::GetFactorFor95PctSuccess(num_entries);
+    num_entries = static_cast<uint32_t>(slots / f + 0.999999999);
 
     // Consider possible Bloom fallback for small filters
     if (slots < 1024) {
@@ -675,10 +675,9 @@ class Standard128RibbonBitsBuilder : public XXH3pFilterBitsBuilder {
   using TS = Standard128RibbonTypesAndSettings;
   using SolnType = ribbon::SerializableInterleavedSolution<TS>;
   using BandingType = ribbon::StandardBanding<TS>;
-  using ConfigHelper = ribbon::BandingConfigHelper1TS<ribbon::kOneIn20, TS>;
 
   static uint32_t NumEntriesToNumSlots(uint32_t num_entries) {
-    uint32_t num_slots1 = ConfigHelper::GetNumSlots(num_entries);
+    uint32_t num_slots1 = BandingType::GetNumSlotsFor95PctSuccess(num_entries);
     return SolnType::RoundUpNumSlots(num_slots1);
   }
 
@@ -726,22 +725,13 @@ class Standard128RibbonBitsReader : public FilterBitsReader {
   }
 
   virtual void MayMatch(int num_keys, Slice** keys, bool* may_match) override {
-    struct SavedData {
-      uint64_t seeded_hash;
-      uint32_t segment_num;
-      uint32_t num_columns;
-      uint32_t start_bits;
-    };
-    std::array<SavedData, MultiGetContext::MAX_BATCH_SIZE> saved;
+    std::array<uint64_t, MultiGetContext::MAX_BATCH_SIZE> hashes;
     for (int i = 0; i < num_keys; ++i) {
-      ribbon::InterleavedPrepareQuery(
-          GetSliceHash64(*keys[i]), hasher_, soln_, &saved[i].seeded_hash,
-          &saved[i].segment_num, &saved[i].num_columns, &saved[i].start_bits);
+      hashes[i] = GetSliceHash64(*keys[i]);
+      // FIXME: batched get optimization
     }
     for (int i = 0; i < num_keys; ++i) {
-      may_match[i] = ribbon::InterleavedFilterQuery(
-          saved[i].seeded_hash, saved[i].segment_num, saved[i].num_columns,
-          saved[i].start_bits, hasher_, soln_);
+      may_match[i] = soln_.FilterQuery(hashes[i], hasher_);
     }
   }
 
@@ -766,10 +756,6 @@ class LegacyBloomBitsBuilder : public BuiltinFilterBitsBuilder {
   ~LegacyBloomBitsBuilder() override;
 
   void AddKey(const Slice& key) override;
-
-  virtual size_t EstimateEntriesAdded() override {
-    return hash_entries_.size();
-  }
 
   Slice Finish(std::unique_ptr<const char[]>* buf) override;
 
@@ -1370,7 +1356,7 @@ const FilterPolicy* NewBloomFilterPolicy(double bits_per_key,
   return new BloomFilterPolicy(bits_per_key, m);
 }
 
-extern const FilterPolicy* NewRibbonFilterPolicy(
+extern const FilterPolicy* NewExperimentalRibbonFilterPolicy(
     double bloom_equivalent_bits_per_key) {
   return new BloomFilterPolicy(bloom_equivalent_bits_per_key,
                                BloomFilterPolicy::kStandard128Ribbon);
@@ -1387,7 +1373,6 @@ Status FilterPolicy::CreateFromString(
     std::shared_ptr<const FilterPolicy>* policy) {
   const std::string kBloomName = "bloomfilter:";
   const std::string kExpRibbonName = "experimental_ribbon:";
-  const std::string kRibbonName = "ribbonfilter:";
   if (value == kNullptrString || value == "rocksdb.BuiltinBloomFilter") {
     policy->reset();
 #ifndef ROCKSDB_LITE
@@ -1409,10 +1394,6 @@ Status FilterPolicy::CreateFromString(
         ParseDouble(trim(value.substr(kExpRibbonName.size())));
     policy->reset(
         NewExperimentalRibbonFilterPolicy(bloom_equivalent_bits_per_key));
-  } else if (value.compare(0, kRibbonName.size(), kRibbonName) == 0) {
-    double bloom_equivalent_bits_per_key =
-        ParseDouble(trim(value.substr(kRibbonName.size())));
-    policy->reset(NewRibbonFilterPolicy(bloom_equivalent_bits_per_key));
   } else {
     return Status::NotFound("Invalid filter policy name ", value);
 #else

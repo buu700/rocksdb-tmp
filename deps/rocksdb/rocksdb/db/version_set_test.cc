@@ -11,8 +11,6 @@
 
 #include "db/db_impl/db_impl.h"
 #include "db/log_writer.h"
-#include "rocksdb/convenience.h"
-#include "rocksdb/file_system.h"
 #include "table/block_based/block_based_table_factory.h"
 #include "table/mock_table.h"
 #include "test_util/testharness.h"
@@ -104,7 +102,7 @@ class VersionStorageInfoTestBase : public testing::Test {
   InternalKeyComparator icmp_;
   std::shared_ptr<CountingLogger> logger_;
   Options options_;
-  ImmutableOptions ioptions_;
+  ImmutableCFOptions ioptions_;
   MutableCFOptions mutable_cf_options_;
   VersionStorageInfo vstorage_;
 
@@ -699,16 +697,21 @@ class VersionSetTestBase {
         options_(),
         db_options_(options_),
         cf_options_(options_),
-        immutable_options_(db_options_, cf_options_),
+        immutable_cf_options_(db_options_, cf_options_),
         mutable_cf_options_(cf_options_),
         table_cache_(NewLRUCache(50000, 16)),
         write_buffer_manager_(db_options_.db_write_buffer_size),
         shutting_down_(false),
         mock_table_factory_(std::make_shared<mock::MockTableFactory>()) {
-    EXPECT_OK(test::CreateEnvFromSystem(ConfigOptions(), &env_, &env_guard_));
-    if (env_ == Env::Default() && getenv("MEM_ENV")) {
+    const char* test_env_uri = getenv("TEST_ENV_URI");
+    if (test_env_uri) {
+      Status s = Env::LoadEnv(test_env_uri, &env_, &env_guard_);
+      EXPECT_OK(s);
+    } else if (getenv("MEM_ENV")) {
       env_guard_.reset(NewMemEnv(Env::Default()));
       env_ = env_guard_.get();
+    } else {
+      env_ = Env::Default();
     }
     EXPECT_NE(nullptr, env_);
 
@@ -718,15 +721,13 @@ class VersionSetTestBase {
     options_.env = env_;
     db_options_.env = env_;
     db_options_.fs = fs_;
-    immutable_options_.env = env_;
-    immutable_options_.fs = fs_;
-    immutable_options_.clock = env_->GetSystemClock().get();
+    immutable_cf_options_.env = env_;
+    immutable_cf_options_.fs = fs_.get();
 
     versions_.reset(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     reactive_versions_ = std::make_shared<ReactiveVersionSet>(
         dbname_, &db_options_, env_options_, table_cache_.get(),
         &write_buffer_manager_, &write_controller_, nullptr);
@@ -782,13 +783,13 @@ class VersionSetTestBase {
     }
     *last_seqno = last_seq;
     num_initial_edits_ = static_cast<int>(new_cfs.size() + 1);
-    std::unique_ptr<WritableFileWriter> file_writer;
     const std::string manifest = DescriptorFileName(dbname_, 1);
-    const auto& fs = env_->GetFileSystem();
-    Status s = WritableFileWriter::Create(
-        fs, manifest, fs->OptimizeForManifestWrite(env_options_), &file_writer,
-        nullptr);
+    std::unique_ptr<WritableFile> file;
+    Status s = env_->NewWritableFile(
+        manifest, &file, env_->OptimizeForManifestWrite(env_options_));
     ASSERT_OK(s);
+    std::unique_ptr<WritableFileWriter> file_writer(new WritableFileWriter(
+        NewLegacyWritableFileWrapper(std::move(file)), manifest, env_options_));
     {
       log_writer->reset(new log::Writer(std::move(file_writer), 0, false));
       std::string record;
@@ -829,8 +830,7 @@ class VersionSetTestBase {
     versions_.reset(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     EXPECT_OK(versions_->Recover(column_families_, false));
   }
 
@@ -908,7 +908,7 @@ class VersionSetTestBase {
   Options options_;
   ImmutableDBOptions db_options_;
   ColumnFamilyOptions cf_options_;
-  ImmutableOptions immutable_options_;
+  ImmutableCFOptions immutable_cf_options_;
   MutableCFOptions mutable_cf_options_;
   std::shared_ptr<Cache> table_cache_;
   WriteController write_controller_;
@@ -1334,8 +1334,7 @@ TEST_F(VersionSetTest, WalAddition) {
     std::unique_ptr<VersionSet> new_versions(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     ASSERT_OK(new_versions->Recover(column_families_, /*read_only=*/false));
     const auto& wals = new_versions->GetWalSet().GetWals();
     ASSERT_EQ(wals.size(), 1);
@@ -1401,8 +1400,7 @@ TEST_F(VersionSetTest, WalCloseWithoutSync) {
     std::unique_ptr<VersionSet> new_versions(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     ASSERT_OK(new_versions->Recover(column_families_, false));
     const auto& wals = new_versions->GetWalSet().GetWals();
     ASSERT_EQ(wals.size(), 2);
@@ -1454,8 +1452,7 @@ TEST_F(VersionSetTest, WalDeletion) {
     std::unique_ptr<VersionSet> new_versions(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     ASSERT_OK(new_versions->Recover(column_families_, false));
     const auto& wals = new_versions->GetWalSet().GetWals();
     ASSERT_EQ(wals.size(), 1);
@@ -1492,8 +1489,7 @@ TEST_F(VersionSetTest, WalDeletion) {
     std::unique_ptr<VersionSet> new_versions(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     ASSERT_OK(new_versions->Recover(column_families_, false));
     const auto& wals = new_versions->GetWalSet().GetWals();
     ASSERT_EQ(wals.size(), 1);
@@ -1610,8 +1606,7 @@ TEST_F(VersionSetTest, DeleteWalsBeforeNonExistingWalNumber) {
     std::unique_ptr<VersionSet> new_versions(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     ASSERT_OK(new_versions->Recover(column_families_, false));
     const auto& wals = new_versions->GetWalSet().GetWals();
     ASSERT_EQ(wals.size(), 1);
@@ -1646,8 +1641,7 @@ TEST_F(VersionSetTest, DeleteAllWals) {
     std::unique_ptr<VersionSet> new_versions(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     ASSERT_OK(new_versions->Recover(column_families_, false));
     const auto& wals = new_versions->GetWalSet().GetWals();
     ASSERT_EQ(wals.size(), 0);
@@ -1688,8 +1682,7 @@ TEST_F(VersionSetTest, AtomicGroupWithWalEdits) {
     std::unique_ptr<VersionSet> new_versions(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     std::string db_id;
     ASSERT_OK(
         new_versions->Recover(column_families_, /*read_only=*/false, &db_id));
@@ -1742,8 +1735,7 @@ class VersionSetWithTimestampTest : public VersionSetTest {
     std::unique_ptr<VersionSet> vset(
         new VersionSet(dbname_, &db_options_, env_options_, table_cache_.get(),
                        &write_buffer_manager_, &write_controller_,
-                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr,
-                       /*db_session_id*/ ""));
+                       /*block_cache_tracer=*/nullptr, /*io_tracer=*/nullptr));
     ASSERT_OK(vset->Recover(column_families_, /*read_only=*/false,
                             /*db_id=*/nullptr));
     for (auto* cfd : *(vset->GetColumnFamilySet())) {
@@ -1891,6 +1883,13 @@ class VersionSetAtomicGroupTest : public VersionSetTestBase,
           num_recovered_edits_ = *reinterpret_cast<int*>(arg);
         });
     SyncPoint::GetInstance()->SetCallBack(
+        "VersionSet::ReadAndRecover:RecoveredEdits", [&](void* arg) {
+          num_recovered_edits_ = *reinterpret_cast<int*>(arg);
+        });
+    SyncPoint::GetInstance()->SetCallBack(
+        "ReactiveVersionSet::ReadAndApply:AppliedEdits",
+        [&](void* arg) { num_applied_edits_ = *reinterpret_cast<int*>(arg); });
+    SyncPoint::GetInstance()->SetCallBack(
         "AtomicGroupReadBuffer::AddEdit:AtomicGroup",
         [&](void* /* arg */) { ++num_edits_in_atomic_group_; });
     SyncPoint::GetInstance()->SetCallBack(
@@ -1929,6 +1928,7 @@ class VersionSetAtomicGroupTest : public VersionSetTestBase,
   bool last_in_atomic_group_ = false;
   int num_edits_in_atomic_group_ = 0;
   int num_recovered_edits_ = 0;
+  int num_applied_edits_ = 0;
   VersionEdit corrupted_edit_;
   VersionEdit edit_with_incorrect_group_size_;
   std::unique_ptr<log::Writer> log_writer_;
@@ -1944,6 +1944,7 @@ TEST_F(VersionSetAtomicGroupTest, HandleValidAtomicGroupWithVersionSetRecover) {
   EXPECT_TRUE(first_in_atomic_group_);
   EXPECT_TRUE(last_in_atomic_group_);
   EXPECT_EQ(num_initial_edits_ + kAtomicGroupSize, num_recovered_edits_);
+  EXPECT_EQ(0, num_applied_edits_);
 }
 
 TEST_F(VersionSetAtomicGroupTest,
@@ -1965,6 +1966,7 @@ TEST_F(VersionSetAtomicGroupTest,
   EXPECT_TRUE(reactive_versions_->TEST_read_edits_in_atomic_group() == 0);
   EXPECT_TRUE(reactive_versions_->replay_buffer().size() == 0);
   EXPECT_EQ(num_initial_edits_ + kAtomicGroupSize, num_recovered_edits_);
+  EXPECT_EQ(0, num_applied_edits_);
 }
 
 TEST_F(VersionSetAtomicGroupTest,
@@ -1977,20 +1979,20 @@ TEST_F(VersionSetAtomicGroupTest,
   EXPECT_OK(reactive_versions_->Recover(column_families_, &manifest_reader,
                                         &manifest_reporter,
                                         &manifest_reader_status));
-  EXPECT_EQ(num_initial_edits_, num_recovered_edits_);
   AddNewEditsToLog(kAtomicGroupSize);
   InstrumentedMutex mu;
   std::unordered_set<ColumnFamilyData*> cfds_changed;
   mu.Lock();
-  EXPECT_OK(reactive_versions_->ReadAndApply(
-      &mu, &manifest_reader, manifest_reader_status.get(), &cfds_changed));
+  EXPECT_OK(
+      reactive_versions_->ReadAndApply(&mu, &manifest_reader, &cfds_changed));
   mu.Unlock();
   EXPECT_TRUE(first_in_atomic_group_);
   EXPECT_TRUE(last_in_atomic_group_);
   // The recover should clean up the replay buffer.
   EXPECT_TRUE(reactive_versions_->TEST_read_edits_in_atomic_group() == 0);
   EXPECT_TRUE(reactive_versions_->replay_buffer().size() == 0);
-  EXPECT_EQ(kAtomicGroupSize, num_recovered_edits_);
+  EXPECT_EQ(num_initial_edits_, num_recovered_edits_);
+  EXPECT_EQ(kAtomicGroupSize, num_applied_edits_);
 }
 
 TEST_F(VersionSetAtomicGroupTest,
@@ -2006,6 +2008,7 @@ TEST_F(VersionSetAtomicGroupTest,
   EXPECT_FALSE(last_in_atomic_group_);
   EXPECT_EQ(kNumberOfPersistedVersionEdits, num_edits_in_atomic_group_);
   EXPECT_EQ(num_initial_edits_, num_recovered_edits_);
+  EXPECT_EQ(0, num_applied_edits_);
 }
 
 TEST_F(VersionSetAtomicGroupTest,
@@ -2037,13 +2040,14 @@ TEST_F(VersionSetAtomicGroupTest,
   InstrumentedMutex mu;
   std::unordered_set<ColumnFamilyData*> cfds_changed;
   mu.Lock();
-  EXPECT_OK(reactive_versions_->ReadAndApply(
-      &mu, &manifest_reader, manifest_reader_status.get(), &cfds_changed));
+  EXPECT_OK(
+      reactive_versions_->ReadAndApply(&mu, &manifest_reader, &cfds_changed));
   mu.Unlock();
   // Reactive version set should be empty now.
   EXPECT_TRUE(reactive_versions_->TEST_read_edits_in_atomic_group() == 0);
   EXPECT_TRUE(reactive_versions_->replay_buffer().size() == 0);
   EXPECT_EQ(num_initial_edits_, num_recovered_edits_);
+  EXPECT_EQ(kAtomicGroupSize, num_applied_edits_);
 }
 
 TEST_F(VersionSetAtomicGroupTest,
@@ -2060,14 +2064,13 @@ TEST_F(VersionSetAtomicGroupTest,
                                         &manifest_reader_status));
   EXPECT_EQ(column_families_.size(),
             reactive_versions_->GetColumnFamilySet()->NumberOfColumnFamilies());
-  EXPECT_EQ(num_initial_edits_, num_recovered_edits_);
   // Write a few edits in an atomic group.
   AddNewEditsToLog(kNumberOfPersistedVersionEdits);
   InstrumentedMutex mu;
   std::unordered_set<ColumnFamilyData*> cfds_changed;
   mu.Lock();
-  EXPECT_OK(reactive_versions_->ReadAndApply(
-      &mu, &manifest_reader, manifest_reader_status.get(), &cfds_changed));
+  EXPECT_OK(
+      reactive_versions_->ReadAndApply(&mu, &manifest_reader, &cfds_changed));
   mu.Unlock();
   EXPECT_TRUE(first_in_atomic_group_);
   EXPECT_FALSE(last_in_atomic_group_);
@@ -2076,6 +2079,8 @@ TEST_F(VersionSetAtomicGroupTest,
   EXPECT_TRUE(reactive_versions_->TEST_read_edits_in_atomic_group() ==
               kNumberOfPersistedVersionEdits);
   EXPECT_TRUE(reactive_versions_->replay_buffer().size() == kAtomicGroupSize);
+  EXPECT_EQ(num_initial_edits_, num_recovered_edits_);
+  EXPECT_EQ(0, num_applied_edits_);
 }
 
 TEST_F(VersionSetAtomicGroupTest,
@@ -2122,8 +2127,8 @@ TEST_F(VersionSetAtomicGroupTest,
   // Write the corrupted edits.
   AddNewEditsToLog(kAtomicGroupSize);
   mu.Lock();
-  EXPECT_NOK(reactive_versions_->ReadAndApply(
-      &mu, &manifest_reader, manifest_reader_status.get(), &cfds_changed));
+  EXPECT_NOK(
+      reactive_versions_->ReadAndApply(&mu, &manifest_reader, &cfds_changed));
   mu.Unlock();
   EXPECT_EQ(edits_[kAtomicGroupSize / 2].DebugString(),
             corrupted_edit_.DebugString());
@@ -2172,8 +2177,8 @@ TEST_F(VersionSetAtomicGroupTest,
                                         &manifest_reader_status));
   AddNewEditsToLog(kAtomicGroupSize);
   mu.Lock();
-  EXPECT_NOK(reactive_versions_->ReadAndApply(
-      &mu, &manifest_reader, manifest_reader_status.get(), &cfds_changed));
+  EXPECT_NOK(
+      reactive_versions_->ReadAndApply(&mu, &manifest_reader, &cfds_changed));
   mu.Unlock();
   EXPECT_EQ(edits_[1].DebugString(),
             edit_with_incorrect_group_size_.DebugString());
@@ -2307,13 +2312,14 @@ class EmptyDefaultCfNewManifest : public VersionSetTestBase,
     assert(log_writer != nullptr);
     VersionEdit new_db;
     new_db.SetLogNumber(0);
+    std::unique_ptr<WritableFile> file;
     const std::string manifest_path = DescriptorFileName(dbname_, 1);
-    const auto& fs = env_->GetFileSystem();
-    std::unique_ptr<WritableFileWriter> file_writer;
-    Status s = WritableFileWriter::Create(
-        fs, manifest_path, fs->OptimizeForManifestWrite(env_options_),
-        &file_writer, nullptr);
+    Status s = env_->NewWritableFile(
+        manifest_path, &file, env_->OptimizeForManifestWrite(env_options_));
     ASSERT_OK(s);
+    std::unique_ptr<WritableFileWriter> file_writer(
+        new WritableFileWriter(NewLegacyWritableFileWrapper(std::move(file)),
+                               manifest_path, env_options_));
     log_writer->reset(new log::Writer(std::move(file_writer), 0, true));
     std::string record;
     ASSERT_TRUE(new_db.EncodeTo(&record));
@@ -2381,12 +2387,13 @@ class VersionSetTestEmptyDb
       new_db.SetDBId(db_id);
     }
     const std::string manifest_path = DescriptorFileName(dbname_, 1);
-    const auto& fs = env_->GetFileSystem();
-    std::unique_ptr<WritableFileWriter> file_writer;
-    Status s = WritableFileWriter::Create(
-        fs, manifest_path, fs->OptimizeForManifestWrite(env_options_),
-        &file_writer, nullptr);
+    std::unique_ptr<WritableFile> file;
+    Status s = env_->NewWritableFile(
+        manifest_path, &file, env_->OptimizeForManifestWrite(env_options_));
     ASSERT_OK(s);
+    std::unique_ptr<WritableFileWriter> file_writer(
+        new WritableFileWriter(NewLegacyWritableFileWrapper(std::move(file)),
+                               manifest_path, env_options_));
     {
       log_writer->reset(new log::Writer(std::move(file_writer), 0, false));
       std::string record;
@@ -2690,12 +2697,12 @@ class VersionSetTestMissingFiles : public VersionSetTestBase,
     assert(last_seqno != nullptr);
     assert(log_writer != nullptr);
     const std::string manifest = DescriptorFileName(dbname_, 1);
-    const auto& fs = env_->GetFileSystem();
-    std::unique_ptr<WritableFileWriter> file_writer;
-    Status s = WritableFileWriter::Create(
-        fs, manifest, fs->OptimizeForManifestWrite(env_options_), &file_writer,
-        nullptr);
+    std::unique_ptr<WritableFile> file;
+    Status s = env_->NewWritableFile(
+        manifest, &file, env_->OptimizeForManifestWrite(env_options_));
     ASSERT_OK(s);
+    std::unique_ptr<WritableFileWriter> file_writer(new WritableFileWriter(
+        NewLegacyWritableFileWrapper(std::move(file)), manifest, env_options_));
     log_writer->reset(new log::Writer(std::move(file_writer), 0, false));
     VersionEdit new_db;
     if (db_options_.write_dbid_to_manifest) {
@@ -2779,17 +2786,18 @@ class VersionSetTestMissingFiles : public VersionSetTestBase,
       std::unique_ptr<FSWritableFile> file;
       Status s = fs_->NewWritableFile(fname, FileOptions(), &file, nullptr);
       ASSERT_OK(s);
-      std::unique_ptr<WritableFileWriter> fwriter(new WritableFileWriter(
-          std::move(file), fname, FileOptions(), env_->GetSystemClock().get()));
-      IntTblPropCollectorFactories int_tbl_prop_collector_factories;
+      std::unique_ptr<WritableFileWriter> fwriter(
+          new WritableFileWriter(std::move(file), fname, FileOptions(), env_));
+      std::vector<std::unique_ptr<IntTblPropCollectorFactory>>
+          int_tbl_prop_collector_factories;
 
       std::unique_ptr<TableBuilder> builder(table_factory_->NewTableBuilder(
           TableBuilderOptions(
-              immutable_options_, mutable_cf_options_, *internal_comparator_,
+              immutable_cf_options_, mutable_cf_options_, *internal_comparator_,
               &int_tbl_prop_collector_factories, kNoCompression,
-              CompressionOptions(),
-              TablePropertiesCollectorFactory::Context::kUnknownColumnFamily,
-              info.column_family, info.level),
+              /*_sample_for_compression=*/0, CompressionOptions(),
+              /*_skip_filters=*/false, info.column_family, info.level),
+          TablePropertiesCollectorFactory::Context::kUnknownColumnFamily,
           fwriter.get()));
       InternalKey ikey(info.key, 0, ValueType::kTypeValue);
       builder->Add(ikey.Encode(), "value");
@@ -2799,9 +2807,11 @@ class VersionSetTestMissingFiles : public VersionSetTestBase,
       s = fs_->GetFileSize(fname, IOOptions(), &file_size, nullptr);
       ASSERT_OK(s);
       ASSERT_NE(0, file_size);
-      file_metas->emplace_back(file_num, /*file_path_id=*/0, file_size, ikey,
-                               ikey, 0, 0, false, 0, 0, 0, kUnknownFileChecksum,
-                               kUnknownFileChecksumFuncName);
+      FileMetaData meta;
+      meta = FileMetaData(file_num, /*file_path_id=*/0, file_size, ikey, ikey,
+                          0, 0, false, 0, 0, 0, kUnknownFileChecksum,
+                          kUnknownFileChecksumFuncName);
+      file_metas->emplace_back(meta);
     }
   }
 

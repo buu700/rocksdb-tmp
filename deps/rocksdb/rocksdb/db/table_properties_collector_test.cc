@@ -41,22 +41,22 @@ namespace {
 static const uint32_t kTestColumnFamilyId = 66;
 static const std::string kTestColumnFamilyName = "test_column_fam";
 
-void MakeBuilder(
-    const Options& options, const ImmutableOptions& ioptions,
-    const MutableCFOptions& moptions,
-    const InternalKeyComparator& internal_comparator,
-    const IntTblPropCollectorFactories* int_tbl_prop_collector_factories,
-    std::unique_ptr<WritableFileWriter>* writable,
-    std::unique_ptr<TableBuilder>* builder) {
+void MakeBuilder(const Options& options, const ImmutableCFOptions& ioptions,
+                 const MutableCFOptions& moptions,
+                 const InternalKeyComparator& internal_comparator,
+                 const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
+                     int_tbl_prop_collector_factories,
+                 std::unique_ptr<WritableFileWriter>* writable,
+                 std::unique_ptr<TableBuilder>* builder) {
   std::unique_ptr<FSWritableFile> wf(new test::StringSink);
   writable->reset(
       new WritableFileWriter(std::move(wf), "" /* don't care */, EnvOptions()));
   int unknown_level = -1;
-  TableBuilderOptions tboptions(
+  builder->reset(NewTableBuilder(
       ioptions, moptions, internal_comparator, int_tbl_prop_collector_factories,
-      options.compression, options.compression_opts, kTestColumnFamilyId,
-      kTestColumnFamilyName, unknown_level);
-  builder->reset(NewTableBuilder(tboptions, writable->get()));
+      kTestColumnFamilyId, kTestColumnFamilyName, writable->get(),
+      options.compression, options.sample_for_compression,
+      options.compression_opts, unknown_level));
 }
 }  // namespace
 
@@ -176,9 +176,9 @@ class RegularKeysStartWithAInternal : public IntTblPropCollector {
     return Status::OK();
   }
 
-  void BlockAdd(uint64_t /* block_raw_bytes */,
-                uint64_t /* block_compressed_bytes_fast */,
-                uint64_t /* block_compressed_bytes_slow */) override {
+  void BlockAdd(uint64_t /* blockRawBytes */,
+                uint64_t /* blockCompressedBytesFast */,
+                uint64_t /* blockCompressedBytesSlow */) override {
     // Nothing to do.
     return;
   }
@@ -262,9 +262,10 @@ void TestCustomizedTablePropertiesCollector(
   // -- Step 1: build table
   std::unique_ptr<TableBuilder> builder;
   std::unique_ptr<WritableFileWriter> writer;
-  const ImmutableOptions ioptions(options);
+  const ImmutableCFOptions ioptions(options);
   const MutableCFOptions moptions(options);
-  IntTblPropCollectorFactories int_tbl_prop_collector_factories;
+  std::vector<std::unique_ptr<IntTblPropCollectorFactory>>
+      int_tbl_prop_collector_factories;
   if (test_int_tbl_prop_collector) {
     int_tbl_prop_collector_factories.emplace_back(
         new RegularKeysStartWithAFactory(backward_mode));
@@ -394,7 +395,8 @@ void TestInternalKeyPropertiesCollector(
   Options options;
   test::PlainInternalKeyComparator pikc(options.comparator);
 
-  IntTblPropCollectorFactories int_tbl_prop_collector_factories;
+  std::vector<std::unique_ptr<IntTblPropCollectorFactory>>
+      int_tbl_prop_collector_factories;
   options.table_factory = table_factory;
   if (sanitized) {
     options.table_properties_collector_factories.emplace_back(
@@ -407,11 +409,11 @@ void TestInternalKeyPropertiesCollector(
     options.info_log = std::make_shared<test::NullLogger>();
     options = SanitizeOptions("db",            // just a place holder
                               options);
-    ImmutableOptions ioptions(options);
+    ImmutableCFOptions ioptions(options);
     GetIntTblPropCollectorFactory(ioptions, &int_tbl_prop_collector_factories);
     options.comparator = comparator;
   }
-  const ImmutableOptions ioptions(options);
+  const ImmutableCFOptions ioptions(options);
   MutableCFOptions moptions(options);
 
   for (int iter = 0; iter < 2; ++iter) {

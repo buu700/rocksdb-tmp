@@ -10,9 +10,9 @@
 // Thread-safe (provides internal synchronization)
 
 #pragma once
-#include <cstdint>
 #include <string>
 #include <vector>
+#include <stdint.h>
 
 #include "db/dbformat.h"
 #include "db/range_del_aggregator.h"
@@ -48,11 +48,10 @@ class HistogramImpl;
 // ioptions.row_cache
 class TableCache {
  public:
-  TableCache(const ImmutableOptions& ioptions,
+  TableCache(const ImmutableCFOptions& ioptions,
              const FileOptions& storage_options, Cache* cache,
              BlockCacheTracer* const block_cache_tracer,
-             const std::shared_ptr<IOTracer>& io_tracer,
-             const std::string& db_session_id);
+             const std::shared_ptr<IOTracer>& io_tracer);
   ~TableCache();
 
   // Return an iterator for the specified file number (the corresponding
@@ -184,7 +183,7 @@ class TableCache {
 
   Cache* get_cache() const { return cache_; }
 
-  // Capacity of the backing Cache that indicates infinite TableCache capacity.
+  // Capacity of the backing Cache that indicates inifinite TableCache capacity.
   // For example when max_open_files is -1 we set the backing Cache to this.
   static const int kInfiniteCapacity = 0x400000;
 
@@ -221,7 +220,7 @@ class TableCache {
   bool GetFromRowCache(const Slice& user_key, IterKey& row_cache_key,
                        size_t prefix_size, GetContext* get_context);
 
-  const ImmutableOptions& ioptions_;
+  const ImmutableCFOptions& ioptions_;
   const FileOptions& file_options_;
   Cache* const cache_;
   std::string row_cache_id_;
@@ -229,7 +228,6 @@ class TableCache {
   BlockCacheTracer* const block_cache_tracer_;
   Striped<port::Mutex, Slice> loader_mutex_;
   std::shared_ptr<IOTracer> io_tracer_;
-  std::string db_session_id_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

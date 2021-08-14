@@ -64,10 +64,9 @@ void DumpDBFileSummary(const ImmutableDBOptions& options,
         break;
       case kWalFile:
         if (env->GetFileSize(dbname + "/" + file, &file_size).ok()) {
-          wal_info.append(file)
-              .append(" size: ")
-              .append(std::to_string(file_size))
-              .append(" ; ");
+          char str[16];
+          snprintf(str, sizeof(str), "%" PRIu64, file_size);
+          wal_info.append(file).append(" size: ").append(str).append(" ; ");
         } else {
           Error(options.info_log, "Error when reading LOG file: %s/%s\n",
                 dbname.c_str(), file.c_str());
@@ -121,10 +120,9 @@ void DumpDBFileSummary(const ImmutableDBOptions& options,
       if (ParseFileName(file, &number, &type)) {
         if (type == kWalFile) {
           if (env->GetFileSize(options.wal_dir + "/" + file, &file_size).ok()) {
-            wal_info.append(file)
-                .append(" size: ")
-                .append(std::to_string(file_size))
-                .append(" ; ");
+            char str[16];
+            snprintf(str, sizeof(str), "%" PRIu64, file_size);
+            wal_info.append(file).append(" size: ").append(str).append(" ; ");
           } else {
             Error(options.info_log, "Error when reading LOG file %s/%s\n",
                   options.wal_dir.c_str(), file.c_str());

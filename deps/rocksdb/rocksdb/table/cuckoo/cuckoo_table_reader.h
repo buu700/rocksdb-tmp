@@ -16,6 +16,7 @@
 
 #include "db/dbformat.h"
 #include "file/random_access_file_reader.h"
+#include "options/cf_options.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
 #include "table/table_reader.h"
@@ -24,11 +25,10 @@ namespace ROCKSDB_NAMESPACE {
 
 class Arena;
 class TableReader;
-struct ImmutableOptions;
 
 class CuckooTableReader: public TableReader {
  public:
-  CuckooTableReader(const ImmutableOptions& ioptions,
+  CuckooTableReader(const ImmutableCFOptions& ioptions,
                     std::unique_ptr<RandomAccessFileReader>&& file,
                     uint64_t file_size, const Comparator* user_comparator,
                     uint64_t (*get_slice_hash)(const Slice&, uint32_t,

@@ -52,7 +52,8 @@ static std::unordered_map<std::string, OptionTypeInfo> plain_table_type_info = {
 
 PlainTableFactory::PlainTableFactory(const PlainTableOptions& options)
     : table_options_(options) {
-  RegisterOptions(&table_options_, &plain_table_type_info);
+  ConfigurableHelper::RegisterOptions(*this, &table_options_,
+                                      &plain_table_type_info);
 }
 
 Status PlainTableFactory::NewTableReader(
@@ -70,7 +71,7 @@ Status PlainTableFactory::NewTableReader(
 }
 
 TableBuilder* PlainTableFactory::NewTableBuilder(
-    const TableBuilderOptions& table_builder_options,
+    const TableBuilderOptions& table_builder_options, uint32_t column_family_id,
     WritableFileWriter* file) const {
   // Ignore the skip_filters flag. PlainTable format is optimized for small
   // in-memory dbs. The skip_filters optimization is not useful for plain
@@ -78,10 +79,9 @@ TableBuilder* PlainTableFactory::NewTableBuilder(
   //
   return new PlainTableBuilder(
       table_builder_options.ioptions, table_builder_options.moptions,
-      table_builder_options.int_tbl_prop_collector_factories,
-      table_builder_options.column_family_id, file, table_options_.user_key_len,
-      table_options_.encoding_type, table_options_.index_sparseness,
-      table_options_.bloom_bits_per_key,
+      table_builder_options.int_tbl_prop_collector_factories, column_family_id,
+      file, table_options_.user_key_len, table_options_.encoding_type,
+      table_options_.index_sparseness, table_options_.bloom_bits_per_key,
       table_builder_options.column_family_name, 6,
       table_options_.huge_page_tlb_size, table_options_.hash_table_ratio,
       table_options_.store_index_in_file, table_builder_options.db_id,

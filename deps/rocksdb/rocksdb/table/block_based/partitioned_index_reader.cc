@@ -8,7 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include "table/block_based/partitioned_index_reader.h"
 
-#include "file/random_access_file_reader.h"
+#include "file/file_util.h"
 #include "table/block_based/partitioned_index_iterator.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -146,10 +146,9 @@ Status PartitionIndexReader::CacheDependencies(const ReadOptions& ro,
   uint64_t last_off = handle.offset() + block_size(handle);
   uint64_t prefetch_len = last_off - prefetch_off;
   std::unique_ptr<FilePrefetchBuffer> prefetch_buffer;
-  rep->CreateFilePrefetchBuffer(0, 0, &prefetch_buffer,
-                                false /*Implicit auto readahead*/);
+  rep->CreateFilePrefetchBuffer(0, 0, &prefetch_buffer);
   IOOptions opts;
-  s = rep->file->PrepareIOOptions(ro, opts);
+  s = PrepareIOFromReadOptions(ro, rep->file->env(), opts);
   if (s.ok()) {
     s = prefetch_buffer->Prefetch(opts, rep->file.get(), prefetch_off,
                                   static_cast<size_t>(prefetch_len));
@@ -167,8 +166,8 @@ Status PartitionIndexReader::CacheDependencies(const ReadOptions& ro,
     // filter blocks
     s = table()->MaybeReadBlockAndLoadToCache(
         prefetch_buffer.get(), ro, handle, UncompressionDict::GetEmptyDict(),
-        /*wait=*/true, &block, BlockType::kIndex, /*get_context=*/nullptr,
-        &lookup_context, /*contents=*/nullptr);
+        &block, BlockType::kIndex, /*get_context=*/nullptr, &lookup_context,
+        /*contents=*/nullptr);
 
     if (!s.ok()) {
       return s;

@@ -9,7 +9,7 @@
 int main() {
   fprintf(stderr,
           "Please install gflags to run block_cache_trace_analyzer_test\n");
-  return 0;
+  return 1;
 }
 #else
 
@@ -225,9 +225,7 @@ TEST_F(BlockCacheTracerTest, BlockCacheAnalyzer) {
     std::unique_ptr<TraceWriter> trace_writer;
     ASSERT_OK(NewFileTraceWriter(env_, env_options_, trace_file_path_,
                                  &trace_writer));
-    const auto& clock = env_->GetSystemClock();
-    BlockCacheTraceWriter writer(clock.get(), trace_opt,
-                                 std::move(trace_writer));
+    BlockCacheTraceWriter writer(env_, trace_opt, std::move(trace_writer));
     ASSERT_OK(writer.WriteHeader());
     WriteBlockAccess(&writer, 0, TraceType::kBlockTraceDataBlock, 50);
     ASSERT_OK(env_->FileExists(trace_file_path_));
@@ -612,11 +610,9 @@ TEST_F(BlockCacheTracerTest, MixedBlocks) {
     // kSSTStoringEvenKeys.
     TraceOptions trace_opt;
     std::unique_ptr<TraceWriter> trace_writer;
-    const auto& clock = env_->GetSystemClock();
     ASSERT_OK(NewFileTraceWriter(env_, env_options_, trace_file_path_,
                                  &trace_writer));
-    BlockCacheTraceWriter writer(clock.get(), trace_opt,
-                                 std::move(trace_writer));
+    BlockCacheTraceWriter writer(env_, trace_opt, std::move(trace_writer));
     ASSERT_OK(writer.WriteHeader());
     // Write blocks of different types.
     WriteBlockAccess(&writer, 0, TraceType::kBlockTraceUncompressionDictBlock,
